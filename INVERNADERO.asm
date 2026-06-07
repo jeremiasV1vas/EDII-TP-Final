@@ -41,3 +41,8 @@ pclath_temp	EQU	0x7F		; variable used for context saving
 	swapf   w_temp,f
 	swapf   w_temp,w          ; restore pre-isr W register contents
 	retfie
+
+
+main
+
+	END
