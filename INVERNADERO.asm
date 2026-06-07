@@ -45,4 +45,24 @@ pclath_temp	EQU	0x7F		; variable used for context saving
 
 main
 
+	; configuracion de registros necesarios para usar el puerto B por interrupciones
+	; con un teclado matricial 4x4 conectado a RB0-RB3 y RB4-RB7 respectivamente
+	banksel ANSEL
+	movlw	0xFF		; configurar todos los pines del puerto B como digitales
+	movwf	ANSEL
+
+	banksel PORTB
+	movlw   b'00000000'	; configurar el puerto B con valores iniciales de 0
+	movwf   PORTB
+
+	banksel TRISB
+	movlw   b'00001111'	; configurar RB0-RB3 como entradas y RB4-RB7 como salidas
+	movwf   TRISB
+
+	banksel IOCB
+	movlw   b'00001111'	; habilitar interrupciones por cambio de estado en RB0-RB3
+	movwf   IOCB
+
+
+
 	END
