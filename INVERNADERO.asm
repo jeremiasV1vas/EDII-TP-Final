@@ -12,10 +12,18 @@ list		p=16f887	; list directive to define processor
 
 
 ;***** VARIABLE DEFINITIONS
-w_temp		EQU	0x7D		; variable used for context saving
-status_temp	EQU	0x7E		; variable used for context saving
-pclath_temp	EQU	0x7F		; variable used for context saving
+#DEFINE TMR0_VALUE d'152'	; valor de recarga para timer0, con prescaler 1:32 y Fosc=4MHz, para obtener una interrupcion cada 3.33ms
 
+
+cblock 0x20	; inicio de bloque de variables en banco 0
+	display_sel		; variable para seleccionar el display a mostrar (2-0)
+	display0_value	; variable para almacenar el valor a mostrar en el display 0
+	display1_value	; variable para almacenar el valor a mostrar en el display 1
+	display2_value	; variable para almacenar el valor a mostrar en el display 2
+	w_temp			; variable used for context saving
+	status_temp		; variable used for context saving
+	pclath_temp		; variable used for context saving
+endc
 
 ;**********************************************************************
 	ORG     0x000             ; processor reset vector
@@ -32,8 +40,10 @@ pclath_temp	EQU	0x7F		; variable used for context saving
 	movf	PCLATH,w	  ; move pclath register into w register
 	movwf	pclath_temp	  ; save off contents of PCLATH register
 
-; isr code can go here or be located as a call subroutine elsewhere
+	btfsc	INTCON, TMR0IF	; verificar que la interrupcion fue por timer0
+	goto isr_timer0		; si fue por timer0, ir a rutina de atencion de timer0
 
+fin_isr
 	movf	pclath_temp,w	  ; retrieve copy of PCLATH register
 	movwf	PCLATH		  ; restore pre-isr PCLATH register contents
 	movf    status_temp,w     ; retrieve copy of STATUS register
@@ -42,27 +52,121 @@ pclath_temp	EQU	0x7F		; variable used for context saving
 	swapf   w_temp,w          ; restore pre-isr W register contents
 	retfie
 
+ORG 0x010
+
+tabla
+	; tabla de conversion de numeros a display de 7 segmentos
+	; el orden de los segmentos es: a, b, c, d, e, f, g, dp
+	; se considera que el bit 0 es a y el bit 7 es dp
+	; entonces el orden es : dp g f e d c b a
+	; se utiliza logica positiva, es decir, un bit en 1 enciende el segmento correspondiente
+
+	addwf   PCL, f
+	retlw   b'00111111'	; 0
+	retlw   b'00000110'	; 1
+	retlw   b'01011011'	; 2
+	retlw   b'01001111'	; 3
+	retlw   b'01100110'	; 4
+	retlw   b'01101101'	; 5
+	retlw   b'01111101'	; 6
+	retlw   b'00000111'	; 7
+	retlw   b'01111111'	; 8
+	retlw   b'01101111'	; 9
+
+ORG 0x030
 
 main
+	; inicializacion de variables
+	banksel 0
+	movlw   d'2'
+	movwf   display_sel
+	clrf	display0_value
+	clrf	display1_value
+	clrf	display2_value
 
-	; configuracion de registros necesarios para usar el puerto B por interrupciones
-	; con un teclado matricial 4x4 conectado a RB0-RB3 y RB4-RB7 respectivamente
-	banksel ANSEL
-	movlw	0xFF		; configurar todos los pines del puerto B como digitales
-	movwf	ANSEL
+	; configuracion de pines para usar el display de 7 segmentos
 
-	banksel PORTB
-	movlw   b'00000000'	; configurar el puerto B con valores iniciales de 0
-	movwf   PORTB
+	banksel TRISD
+	clrf    TRISD
+	banksel PORTD
+	clrf    PORTD
 
-	banksel TRISB
-	movlw   b'00001111'	; configurar RB0-RB3 como entradas y RB4-RB7 como salidas
-	movwf   TRISB
+	; configuracion del puerto E para seleccionar el display a mostrar
 
-	banksel IOCB
-	movlw   b'00001111'	; habilitar interrupciones por cambio de estado en RB0-RB3
-	movwf   IOCB
+	banksel TRISE
+	clrf    TRISE
+	banksel PORTE
+	clrf    PORTE
 
 
+	; configuracion de timer0
+	;   bit7 nRBPU  = 0 -> pull-ups PORTB habilitados globalmente
+	;   bit6 INTEDG = 1 -> flanco INT externa (no utilizada)
+	;   bit5 T0CS   = 0 -> TMR0 fuente interna (Fosc/4)
+	;   bit4 T0SE   = 0 -> irrelevante con fuente interna
+	;   bit3 PSA    = 0 -> prescaler asignado a TMR0
+	;   bit2 PS2    = 1 -+
+	;   bit1 PS1    = 0  +-> PS=100, prescaler 1:32
+	;   bit0 PS0    = 0 -+
+	banksel OPTION_REG
+	movlw   b'01000100'
+	movwf	OPTION_REG
 
-	END
+	; cargar valor de recarga para timer0
+
+	movlw	TMR0_VALUE	
+	movwf	TMR0
+
+	; habilitar interrupciones
+
+	banksel INTCON
+	bsf		INTCON, TMR0IE	; habilitar interrupcion de timer0
+	bsf		INTCON, GIE	; habilitar interrupciones globales
+
+	goto main_loop
+
+
+main_loop
+
+	goto main_loop
+
+isr_timer0
+
+	movlw	TMR0_VALUE	; recargar timer0 para obtener una interrupcion cada 3.33ms
+	movwf	TMR0
+
+	banksel PORTE
+	clrf    PORTE		; apagar todos los displays (evita ghosting)
+
+	; salto indexado para mostrar el display correspondiente
+
+	banksel 0
+	movf	display_sel,w	; cargar display_sel en W para usarlo como indice
+	addwf   PCL, f		; selecciona el display
+	goto	caso_display0
+	goto	caso_display1
+	goto	caso_display2
+
+caso_display0
+	movf	display0_value,w	; cargar el valor a mostrar en display0
+	movwf   PORTD			; mostrar valor en display0
+	bsf     PORTE, 0		; encender display0
+	goto fin_multiplexado
+caso_display1
+	movf	display1_value,w	; cargar el valor a mostrar en display1
+	movwf   PORTD			; mostrar valor en display1
+	bsf     PORTE, 1		; encender display1
+	goto fin_multiplexado
+caso_display2
+	movf	display2_value,w	; cargar el valor a mostrar en display2
+	movwf   PORTD			; mostrar valor en display2
+	bsf     PORTE, 2		; encender display2
+	goto fin_multiplexado
+
+fin_multiplexado
+	bcf     INTCON, TMR0IF
+	goto    fin_isr
+	
+
+
+END
