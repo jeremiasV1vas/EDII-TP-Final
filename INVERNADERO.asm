@@ -13,7 +13,9 @@ list		p=16f887	; list directive to define processor
 
 ;***** VARIABLE DEFINITIONS
 #DEFINE TMR0_VALUE d'152'	; valor de recarga para timer0, con prescaler 1:32 y Fosc=4MHz, para obtener una interrupcion cada 3.33ms
-
+#DEFINE DEBOUNCE_VALUE d'5'	; cantidad de ciclos de timer0 para considerar un rebote como valido (5 ciclos = 16.65ms)
+#DEFINE TECLADO_PRESIONADO 0	; estado del teclado: 0 = no presionado, 1 = presionado
+#DEFINE HABILITAR_TECLADO 1	; estado para habilitar la lectura del teclado en la rutina de atencion de interrupcion por cambio de estado en puerto B
 
 cblock 0x20	; inicio de bloque de variables en banco 0
 	display_sel		; variable para seleccionar el display a mostrar (2-0)
@@ -25,6 +27,9 @@ cblock 0x20	; inicio de bloque de variables en banco 0
 	pclath_temp		; variable used for context saving
 	cont_tests1		; variable para utilizada para contar ciclos de pruebas
 	cont_tests2		; variable para utilizada para contar ciclos de pruebas
+	banderas	; variable para almacenar banderas de estado
+	;             (bit 0: estado del teclado, bit 1: habilitar lectura del teclado)
+	cont_debounce	; variable para contar ciclos de debounce del teclado
 endc
 
 ;**********************************************************************
@@ -165,11 +170,31 @@ isr_timer0
 	movlw	TMR0_VALUE	; recargar timer0 para obtener una interrupcion cada 3.33ms
 	movwf	TMR0
 
+subrutina_debounce
+    ; subrutina para manejar el debounce del teclado
+	btfsc banderas, TECLADO_PRESIONADO	; verificar si el teclado ya fue marcado como presionado
+	goto reset_debounce		; si ya fue marcado, ir a resetear el contador de debounce
+
+	; si no fue marcado como presionado, decrementar el contador de debounce
+	decfsz cont_debounce, f
+	goto subrutina_multiplexado   ; si el contador de debounce no ha llegado a 0, seguir esperando (seguir con la isr del timer0)
+	
+	; si el contador llego a cero, indica que el rebote fue valido, habilitar la lectura del teclado
+	bsf banderas, HABILITAR_TECLADO	; marcar el teclado como presionado
+	goto reset_debounce
+
+reset_debounce
+	bcf banderas, TECLADO_PRESIONADO	; resetear la bandera de teclado presionado para iniciar un nuevo ciclo de debounce
+	;                                   (esto no deberia ser necesario, pero se hace para asegurar que el ciclo de debounce se reinicie correctamente)
+	movlw DEBOUNCE_VALUE	; recargar el contador de debounce
+	movwf cont_debounce
+	goto subrutina_multiplexado		; seguir con la rutina de multiplexado para actualizar los displays
+
+subrutina_multiplexado
 	banksel PORTE
 	clrf    PORTE		; apagar todos los displays (evita ghosting)
 
 	; salto indexado para mostrar el display correspondiente
-
 	banksel 0
 	movf	display_sel,w	; cargar display_sel en W para usarlo como indice
 	addwf   PCL, f		; selecciona el display
@@ -215,5 +240,18 @@ fin_actualizacion
 ; ************************************************************************
 ; Rutina de atencion de interrupcion por cambio de estado en puerto B (keypad)
 isr_keypad
+	bsf banderas, TECLADO_PRESIONADO	; indica que el teclado fue presionado
 
+	btfsc banderas, HABILITAR_TECLADO	; verificar si la lectura del teclado esta habilitada
+	goto leer_teclado		; si esta habilitada, ir a leer el teclado
+
+	goto fin_isr_keypad
+
+leer_teclado
+
+	goto fin_isr_keypad
+	
+fin_isr_keypad
+    bcf	 INTCON, RBIF	; limpiar bandera de interrupcion por cambio de estado en puerto B
+	goto fin_isr
 	END
