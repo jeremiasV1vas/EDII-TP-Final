@@ -52,7 +52,7 @@ fin_isr
 	swapf   w_temp,w          ; restore pre-isr W register contents
 	retfie
 
-ORG 0x010
+ORG 0x020
 
 tabla
 	; tabla de conversion de numeros a display de 7 segmentos
@@ -73,16 +73,19 @@ tabla
 	retlw   b'01111111'	; 8
 	retlw   b'01101111'	; 9
 
-ORG 0x030
+ORG 0x040
 
 main
 	; inicializacion de variables
 	banksel 0
 	movlw   d'2'
 	movwf   display_sel
-	clrf	display0_value
-	clrf	display1_value
-	clrf	display2_value
+	movlw	b'00000110'
+	movwf	display0_value
+	movlw	b'01011011'
+	movwf	display1_value
+	movlw	b'01001111'
+	movwf	display2_value
 
 	; configuracion de pines para usar el display de 7 segmentos
 
@@ -92,7 +95,10 @@ main
 	clrf    PORTD
 
 	; configuracion del puerto E para seleccionar el display a mostrar
-
+	banksel ANSEL
+	bcf	ANSEL,7
+	bcf	ANSEL,6
+	bcf	ANSEL,5
 	banksel TRISE
 	clrf    TRISE
 	banksel PORTE
@@ -164,9 +170,21 @@ caso_display2
 	goto fin_multiplexado
 
 fin_multiplexado
-	bcf     INTCON, TMR0IF
-	goto    fin_isr
+    ; avanzar display_sel ciclicamente: 2 -> 1 -> 0 -> 2
+    movf    display_sel, w
+    btfsc   STATUS, Z       ; si display_sel ya es 0, resetear
+    goto    reset_display_sel
+    decf    display_sel, f
+    goto    fin_actualizacion
+
+reset_display_sel
+    movlw   d'2'
+    movwf   display_sel
+
+fin_actualizacion
+    bcf     INTCON, TMR0IF
+    goto    fin_isr
 	
 
 
-END
+	END
