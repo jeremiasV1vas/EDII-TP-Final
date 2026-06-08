@@ -23,6 +23,8 @@ cblock 0x20	; inicio de bloque de variables en banco 0
 	w_temp			; variable used for context saving
 	status_temp		; variable used for context saving
 	pclath_temp		; variable used for context saving
+	cont_tests1		; variable para utilizada para contar ciclos de pruebas
+	cont_tests2		; variable para utilizada para contar ciclos de pruebas
 endc
 
 ;**********************************************************************
@@ -80,11 +82,11 @@ main
 	banksel 0
 	movlw   d'2'
 	movwf   display_sel
-	movlw	b'00000110'
+	movlw	b'00111111'		; valor para mostrar el numero 0 en el display de 7 segmentos
 	movwf	display0_value
-	movlw	b'01011011'
+	movlw	b'00111111'
 	movwf	display1_value
-	movlw	b'01001111'
+	movlw	b'00111111'
 	movwf	display2_value
 
 	; configuracion de pines para usar el display de 7 segmentos
