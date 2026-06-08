@@ -45,6 +45,9 @@ endc
 	btfsc	INTCON, TMR0IF	; verificar que la interrupcion fue por timer0
 	goto isr_timer0		; si fue por timer0, ir a rutina de atencion de timer0
 
+	btfsc	INTCON, RBIF	; verificar que la interrupcion fue por cambio de estado en puerto B
+	goto isr_keypad		; si fue por cambio de estado en puerto B, ir a rutina de atencion de keypad
+
 fin_isr
 	movf	pclath_temp,w	  ; retrieve copy of PCLATH register
 	movwf	PCLATH		  ; restore pre-isr PCLATH register contents
@@ -125,10 +128,27 @@ main
 	movlw	TMR0_VALUE	
 	movwf	TMR0
 
+	; configuracion de interrupciones para keypad 4x4
+	banksel ANSELH
+	clrf	ANSELH
+	banksel TRISB
+	movlw   b'00001111'	; configurar RB0-RB3 como entradas para el keypad
+	movwf   TRISB
+	banksel PORTB
+	movlw   b'00000000'	
+	movwf   PORTB
+	banksel IOCB
+	movlw   b'00001111'	; habilitar interrupciones por cambio de estado en RB0-RB3
+	movwf   IOCB
+	banksel WPUB
+	movlw   b'00001111'	; habilitar pull-ups en RB0-RB3
+	movwf   WPUB
 	; habilitar interrupciones
 
 	banksel INTCON
+	clrf    INTCON	; limpiar registros de interrupciones
 	bsf		INTCON, TMR0IE	; habilitar interrupcion de timer0
+	bsf 	INTCON, RBIE	; habilitar interrupcion por cambio de estado en puerto B
 	bsf		INTCON, GIE	; habilitar interrupciones globales
 
 	goto main_loop
@@ -191,5 +211,9 @@ fin_actualizacion
 
 ; fin de la rutina de atencion de interrupcion de timer0	
 ; ************************************************************************
+
+; ************************************************************************
+; Rutina de atencion de interrupcion por cambio de estado en puerto B (keypad)
+isr_keypad
 
 	END
