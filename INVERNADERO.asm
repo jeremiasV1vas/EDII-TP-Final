@@ -138,6 +138,8 @@ main_loop
 
 	goto main_loop
 
+; ************************************************************************
+; Rutina de atencion de interrupcion de timer0
 isr_timer0
 
 	movlw	TMR0_VALUE	; recargar timer0 para obtener una interrupcion cada 3.33ms
@@ -186,7 +188,8 @@ reset_display_sel
 fin_actualizacion
     bcf     INTCON, TMR0IF
     goto    fin_isr
-	
 
+; fin de la rutina de atencion de interrupcion de timer0	
+; ************************************************************************
 
 	END
