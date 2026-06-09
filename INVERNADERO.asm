@@ -254,12 +254,13 @@ isr_keypad
 	btfsc	STATUS, Z
 	goto	fin_isr_keypad			; fue soltar, ignorar
 
-	btfsc banderas, HABILITAR_TECLADO	; verificar si la lectura del teclado esta habilitada
+	btfss banderas, HABILITAR_TECLADO	; verificar si la lectura del teclado esta habilitada
 	goto leer_teclado			; si esta habilitada, ir a leer el teclado
 
 	goto fin_isr_keypad
 
 leer_teclado
+	bcf		banderas, HABILITAR_TECLADO	; deshabilitar hasta proximo ciclo de debounce
 	; compruebo que columna se presiono
 	banksel PORTB
 	btfss PORTB, C1
