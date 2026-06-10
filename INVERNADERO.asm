@@ -242,143 +242,143 @@ fin_actualizacion
 ; ************************************************************************
 ; Rutina de atencion de interrupcion por cambio de estado en puerto B (keypad)
 isr_keypad
-	bsf banderas, TECLADO_PRESIONADO	; indica que el teclado fue presionado
+    bsf banderas, TECLADO_PRESIONADO	; indica que el teclado fue presionado
 
-	; limpiar mismatch leyendo PORTB antes de cualquier otra cosa
-	banksel PORTB
-	movf	PORTB, w
+    ; limpiar mismatch leyendo PORTB antes de cualquier otra cosa
+    banksel PORTB
+    movf	PORTB, w
 
-	; verificar si fue evento de soltar (todas las columnas en HIGH)
-	andlw	b'11110000'
-	xorlw	b'11110000'
-	btfsc	STATUS, Z
-	goto	fin_isr_keypad			; fue soltar, ignorar
+    ; verificar si fue evento de soltar (todas las columnas en HIGH)
+    andlw	b'11110000'
+    xorlw	b'11110000'
+    btfsc	STATUS, Z
+    goto	fin_isr_keypad			; fue soltar, ignorar
 
-	btfss banderas, HABILITAR_TECLADO	; verificar si la lectura del teclado esta habilitada
-	goto leer_teclado			; si esta habilitada, ir a leer el teclado
+    btfss banderas, HABILITAR_TECLADO	; verificar si la lectura del teclado esta habilitada
+    goto leer_teclado			; si esta habilitada, ir a leer el teclado
 
-	goto fin_isr_keypad
+    goto fin_isr_keypad
 
 leer_teclado
-	bcf		banderas, HABILITAR_TECLADO	; deshabilitar hasta proximo ciclo de debounce
-	; compruebo que columna se presiono
-	banksel PORTB
-	btfss PORTB, C1
-	goto columna1
-	btfss PORTB, C2
-	goto columna2
-	btfss PORTB, C3
-	goto columna3
-	btfss PORTB, C4
-	goto columna4
-	goto fin_isr_keypad
+    bcf		banderas, HABILITAR_TECLADO	; deshabilitar hasta proximo ciclo de debounce
+    ; compruebo que columna se presiono
+    banksel PORTB
+    btfss PORTB, C1
+    goto columna1
+    btfss PORTB, C2
+    goto columna2
+    btfss PORTB, C3
+    goto columna3
+    btfss PORTB, C4
+    goto columna4
+    goto fin_isr_keypad
 
 columna1
-	; subir todas las filas, luego bajar de a una para identificar la fila
-	bsf		PORTB, 0
-	bsf		PORTB, 1
-	bsf		PORTB, 2
-	bsf		PORTB, 3
-	bcf		PORTB, 0			; activo solo la fila 1
-	btfss	PORTB, C1			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 1
-	bsf		PORTB, 0
-	bcf		PORTB, 1			; activo solo la fila 2
-	btfss	PORTB, C1			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 4
-	bsf		PORTB, 1
-	bcf		PORTB, 2			; activo solo la fila 3
-	btfss	PORTB, C1			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 7
-	bsf		PORTB, 2
-	bcf		PORTB, 3			; activo solo la fila 4
-	btfss	PORTB, C1			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono *
-	goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
+    ; subir todas las filas, luego bajar de a una para identificar la fila
+    bsf		PORTB, 0
+    bsf		PORTB, 1
+    bsf		PORTB, 2
+    bsf		PORTB, 3
+    bcf		PORTB, 0			; activo solo la fila 1
+    btfss	PORTB, C1			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 1
+    bsf		PORTB, 0
+    bcf		PORTB, 1			; activo solo la fila 2
+    btfss	PORTB, C1			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 4
+    bsf		PORTB, 1
+    bcf		PORTB, 2			; activo solo la fila 3
+    btfss	PORTB, C1			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 7
+    bsf		PORTB, 2
+    bcf		PORTB, 3			; activo solo la fila 4
+    btfss	PORTB, C1			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono *
+    goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
 
 columna2
-	bsf		PORTB, 0
-	bsf		PORTB, 1
-	bsf		PORTB, 2
-	bsf		PORTB, 3
-	bcf		PORTB, 0			; activo solo la fila 1
-	btfss	PORTB, C2			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 2
-	bsf		PORTB, 0
-	bcf		PORTB, 1			; activo solo la fila 2
-	btfss	PORTB, C2			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 5
-	bsf		PORTB, 1
-	bcf		PORTB, 2			; activo solo la fila 3
-	btfss	PORTB, C2			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 8
-	bsf		PORTB, 2
-	bcf		PORTB, 3			; activo solo la fila 4
-	btfss	PORTB, C2			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 0
-	goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
+    bsf		PORTB, 0
+    bsf		PORTB, 1
+    bsf		PORTB, 2
+    bsf		PORTB, 3
+    bcf		PORTB, 0			; activo solo la fila 1
+    btfss	PORTB, C2			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 2
+    bsf		PORTB, 0
+    bcf		PORTB, 1			; activo solo la fila 2
+    btfss	PORTB, C2			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 5
+    bsf		PORTB, 1
+    bcf		PORTB, 2			; activo solo la fila 3
+    btfss	PORTB, C2			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 8
+    bsf		PORTB, 2
+    bcf		PORTB, 3			; activo solo la fila 4
+    btfss	PORTB, C2			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 0
+    goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
 
 columna3
-	bsf		PORTB, 0
-	bsf		PORTB, 1
-	bsf		PORTB, 2
-	bsf		PORTB, 3
-	bcf		PORTB, 0			; activo solo la fila 1
-	btfss	PORTB, C3			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 3
-	bsf		PORTB, 0
-	bcf		PORTB, 1			; activo solo la fila 2
-	btfss	PORTB, C3			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 6
-	bsf		PORTB, 1
-	bcf		PORTB, 2			; activo solo la fila 3
-	btfss	PORTB, C3			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono 9
-	bsf		PORTB, 2
-	bcf		PORTB, 3			; activo solo la fila 4
-	btfss	PORTB, C3			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono #
-	goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
+    bsf		PORTB, 0
+    bsf		PORTB, 1
+    bsf		PORTB, 2
+    bsf		PORTB, 3
+    bcf		PORTB, 0			; activo solo la fila 1
+    btfss	PORTB, C3			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 3
+    bsf		PORTB, 0
+    bcf		PORTB, 1			; activo solo la fila 2
+    btfss	PORTB, C3			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 6
+    bsf		PORTB, 1
+    bcf		PORTB, 2			; activo solo la fila 3
+    btfss	PORTB, C3			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono 9
+    bsf		PORTB, 2
+    bcf		PORTB, 3			; activo solo la fila 4
+    btfss	PORTB, C3			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono #
+    goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
 
 columna4
-	bsf		PORTB, 0
-	bsf		PORTB, 1
-	bsf		PORTB, 2
-	bsf		PORTB, 3
-	bcf		PORTB, 0			; activo solo la fila 1
-	btfss	PORTB, C4			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono A
-	bsf		PORTB, 0
-	bcf		PORTB, 1			; activo solo la fila 2
-	btfss	PORTB, C4			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono B
-	bsf		PORTB, 1
-	bcf		PORTB, 2			; activo solo la fila 3
-	btfss	PORTB, C4			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono C
-	bsf		PORTB, 2
-	bcf		PORTB, 3			; activo solo la fila 4
-	btfss	PORTB, C4			; reviso si la lectura persiste
-	goto	no_implementado		; se presiono D
-	goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
+    bsf		PORTB, 0
+    bsf		PORTB, 1
+    bsf		PORTB, 2
+    bsf		PORTB, 3
+    bcf		PORTB, 0			; activo solo la fila 1
+    btfss	PORTB, C4			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono A
+    bsf		PORTB, 0
+    bcf		PORTB, 1			; activo solo la fila 2
+    btfss	PORTB, C4			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono B
+    bsf		PORTB, 1
+    bcf		PORTB, 2			; activo solo la fila 3
+    btfss	PORTB, C4			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono C
+    bsf		PORTB, 2
+    bcf		PORTB, 3			; activo solo la fila 4
+    btfss	PORTB, C4			; reviso si la lectura persiste
+    goto	no_implementado		; se presiono D
+    goto	fin_isr_keypad		; caso descarte, finalizar la interrupcion
 
 no_implementado
-	;banksel 0
-	;movf cont_tests1	
-	;call tabla
-	;movwf display0_value
-	;decfsz cont_tests1,f
-	;goto fin_isr_keypad
-	;movlw d'9'
-	;movwf cont_tests1
+    ;banksel 0
+    ;movf cont_tests1	
+    ;call tabla
+    ;movwf display0_value
+    ;decfsz cont_tests1,f
+    ;goto fin_isr_keypad
+    ;movlw d'9'
+    ;movwf cont_tests1
 
-	goto fin_isr_keypad
+    goto fin_isr_keypad
 
 fin_isr_keypad
-	banksel PORTB
-	movlw	b'00000000'	; devuelvo los puertos del puerto B a su configuracion inicial
-	movwf	PORTB 
-	banksel INTCON
-	bcf	 INTCON, RBIF	; limpiar bandera de interrupcion por cambio de estado en puerto B
-	goto fin_isr
-	END
+    banksel PORTB
+    movlw	b'00000000'	; devuelvo los puertos del puerto B a su configuracion inicial
+    movwf	PORTB 
+    banksel INTCON
+    bcf	 INTCON, RBIF	; limpiar bandera de interrupcion por cambio de estado en puerto B
+    goto fin_isr
+    END
