@@ -266,12 +266,6 @@ isr_keypad
     banksel PORTB
     movf    PORTB, w
 
-    ; verificar si fue evento de soltar (todas las columnas en HIGH)
-    andlw   b'11110000'
-    xorlw   b'11110000'
-    btfsc   STATUS, Z
-    goto    fin_isr_keypad          ; fue soltar, ignorar
-
     btfss   banderas, HABILITAR_TECLADO ; verificar si la lectura del teclado esta habilitada
     goto    fin_isr_keypad          ; si no esta habilitada, ignorar rebote
     
