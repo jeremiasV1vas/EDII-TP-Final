@@ -207,17 +207,181 @@ main
 
 
 main_loop
-	btfss	banderas, BUFFER_KEYPAD	; verifico si hubo un ingreso por teclado
-	goto banderita_temporal			; si no hubo cambio, sigo con el loop principal
+    btfss   banderas, BUFFER_KEYPAD     ; verifico si hubo un ingreso por teclado
+    goto    main_loop                   ; si no hubo, sigo esperando
 
-	; si hubo un ingreso por teclado
-	bcf		banderas, BUFFER_KEYPAD	; bajo la bandera en el principio
+    bcf     banderas, BUFFER_KEYPAD     ; bajo la bandera
 
-	; aca, depende de lo que reciba ahora una cosa u otra
+    ; despachar segun estado actual
+    btfsc   estado_actual, NORMAL
+    goto    loop_estado_normal
+    btfsc   estado_actual, UMBRAL1
+    goto    loop_estado_umbral1
+    goto    loop_estado_umbral2         ; por descarte
 
-banderita_temporal
+; -------------------------------------------------------
+loop_estado_normal
+    ; en estado normal solo A, B, C y * son validas
+    ; las demas fueron filtradas en la ISR
 
-    goto main_loop
+    movf    keypad_value, w
+    xorlw   letraA
+    btfsc   STATUS, Z
+    goto    loop_normal_letraA          ; entrar a config umbral alto temperatura
+
+    movf    keypad_value, w
+    xorlw   letraB
+    btfsc   STATUS, Z
+    goto    loop_normal_letraB          ; entrar a config umbral bajo temperatura
+
+    movf    keypad_value, w
+    xorlw   letraC
+    btfsc   STATUS, Z
+    goto    loop_normal_letraC          ; entrar a config umbral luz
+
+    goto    loop_normal_ast             ; por descarte es simboloAst
+
+loop_normal_letraA
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movwf   estado_temporal             ; guardar que umbral estamos configurando (letraA)
+    ; mostrar 'u' en display0, guiones en display1 y display2
+    movlw   b'00111110'                 ; codigo 7seg de 'U'
+    movwf   display0_value
+    movlw   b'01000000'                 ; codigo 7seg de '-'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_letraB
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movf    keypad_value, w
+    movwf   estado_temporal
+    movlw   b'00111110'
+    movwf   display0_value
+    movlw   b'01000000'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_letraC
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movf    keypad_value, w
+    movwf   estado_temporal
+    movlw   b'00111110'
+    movwf   display0_value
+    movlw   b'01000000'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_ast
+    ; alternar sensor mostrado entre temperatura y luz
+    btfsc   sensor_mostrado, SENSOR_TEMPERATURA
+    goto    loop_ast_cambiar_a_luz
+    clrf    sensor_mostrado
+    bsf     sensor_mostrado, SENSOR_TEMPERATURA
+    goto    main_loop
+loop_ast_cambiar_a_luz
+    clrf    sensor_mostrado
+    bsf     sensor_mostrado, SENSOR_LUZ
+    goto    main_loop
+
+; -------------------------------------------------------
+loop_estado_umbral1
+    ; espera el primer digito (decena) o D para cancelar
+
+    movf    keypad_value, w
+    xorlw   letraD
+    btfsc   STATUS, Z
+    goto    loop_umbral1_cancelar
+
+    ; es un digito numerico: guardarlo como nibble alto de config_umbral_temp
+    ; keypad_value tiene el valor 0-9
+    ; para ponerlo en el nibble alto: swap y AND
+    movf    keypad_value, w
+    movwf   config_umbral_temp          ; guardar temporalmente
+    swapf   config_umbral_temp, f       ; llevar al nibble alto
+    ; display1 muestra el digito ingresado, display2 muestra guion
+    movf    keypad_value, w
+    call    tabla                       ; convertir a codigo 7seg
+    movwf   display1_value
+    movlw   b'01000000'                 ; '-'
+    movwf   display2_value
+    ; avanzar a UMBRAL2
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL2
+    goto    main_loop
+
+loop_umbral1_cancelar
+    clrf    estado_actual
+    bsf     estado_actual, NORMAL
+    clrf    config_umbral_temp
+    goto    main_loop
+
+; -------------------------------------------------------
+loop_estado_umbral2
+    ; espera el segundo digito (unidad) o D para volver a UMBRAL1
+
+    movf    keypad_value, w
+    xorlw   letraD
+    btfsc   STATUS, Z
+    goto    loop_umbral2_volver
+
+    ; es un digito numerico: ponerlo en nibble bajo y cargar el umbral
+    movf    keypad_value, w
+    iorwf   config_umbral_temp, f       ; nibble bajo = unidad, nibble alto ya tenia la decena
+
+    ; mostrar el digito ingresado en display2
+    movf    keypad_value, w
+    call    tabla
+    movwf   display2_value
+
+    ; guardar en el umbral correspondiente segun estado_temporal
+    movf    estado_temporal, w
+    xorlw   letraA
+    btfsc   STATUS, Z
+    goto    loop_umbral2_guardar_alto
+
+    movf    estado_temporal, w
+    xorlw   letraB
+    btfsc   STATUS, Z
+    goto    loop_umbral2_guardar_bajo
+
+    goto    loop_umbral2_guardar_luz     ; por descarte es letraC
+
+loop_umbral2_guardar_alto
+    movf    config_umbral_temp, w
+    movwf   umbral_alto_temperatura
+    goto    loop_umbral2_fin
+
+loop_umbral2_guardar_bajo
+    movf    config_umbral_temp, w
+    movwf   umbral_bajo_temperatura
+    goto    loop_umbral2_fin
+
+loop_umbral2_guardar_luz
+    movf    config_umbral_temp, w
+    movwf   umbral_luz
+    goto    loop_umbral2_fin
+
+loop_umbral2_fin
+    clrf    config_umbral_temp
+    clrf    estado_actual
+    bsf     estado_actual, NORMAL
+    goto    main_loop
+
+loop_umbral2_volver
+    ; D: volver a UMBRAL1, limpiar nibble alto
+    clrf    config_umbral_temp
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movlw   b'01000000'                 ; '-'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
 
 ; ************************************************************************
 ; Rutina de atencion de interrupcion de timer0
