@@ -13,13 +13,30 @@ list        p=16f887    ; list directive to define processor
 
 ;***** VARIABLE DEFINITIONS
 #DEFINE TMR0_VALUE d'152'   ; valor de recarga para timer0, con prescaler 1:32 y Fosc=4MHz, para obtener una interrupcion cada 3.33ms
-#DEFINE DEBOUNCE_VALUE d'5' ; cantidad de ciclos de timer0 para considerar un rebote como valido (5 ciclos = 16.65ms)
+#DEFINE DEBOUNCE_VALUE d'15' ; cantidad de ciclos de timer0 para considerar un rebote como valido (15 ciclos = ~50ms)
+; definicion de banderas del registro "banderas"
 #DEFINE TECLADO_PRESIONADO d'0' ; estado del teclado: 0 = no presionado, 1 = presionado
 #DEFINE HABILITAR_TECLADO d'1'  ; estado para habilitar la lectura del teclado en la rutina de atencion de interrupcion por cambio de estado en puerto B
-#DEFINE C1 d'4'     ; definicion de pines del puerto B usados como columnas
+#DEFINE BUFFER_KEYPAD d'2'
+; definicion de pines del puerto B usados como columnas
+#DEFINE C1 d'4'     
 #DEFINE C2 d'5'
 #DEFINE C3 d'6'
 #DEFINE C4 d'7'
+; definicion de los estados 
+#DEFINE NORMAL d'0'     ; estado base del programa
+#DEFINE UMBRAL1 d'1'    ; programacion del primer digito del umbral
+#DEFINE UMBRAL2 d'2'    ; programacion del segundo digito del umbral
+; definicion de letras que el keypad me puede devolver
+#DEFINE letraA b'00010000'
+#DEFINE letraB b'00100000'
+#DEFINE letraC b'00110000'
+#DEFINE letraD b'01000000'
+#DEFINE simboloAst b'01010000'
+#DEFINE simboloNum b'01100000'
+; definicion de sensores para el registro "sensor_mostrado"
+#DEFINE SENSOR_TEMPERATURA d'0'
+#DEFINE SENSOR_LUZ d'1'
 
 
 cblock 0x20 ; inicio de bloque de variables en banco 0
@@ -27,14 +44,25 @@ cblock 0x20 ; inicio de bloque de variables en banco 0
     display0_value  ; variable para almacenar el valor a mostrar en el display 0
     display1_value  ; variable para almacenar el valor a mostrar en el display 1
     display2_value  ; variable para almacenar el valor a mostrar en el display 2
-    w_temp          ; variable used for context saving
-    status_temp     ; variable used for context saving
-    pclath_temp     ; variable used for context saving
     cont_tests1     ; variable para utilizada para contar ciclos de pruebas
     cont_tests2     ; variable para utilizada para contar ciclos de pruebas
     banderas    ; variable para almacenar banderas de estado
     ;             (bit 0: estado del teclado, bit 1: habilitar lectura del teclado)
     cont_debounce   ; variable para contar ciclos de debounce del teclado
+    estado_actual   ; variable que guarda el estado actual del programa (0 a 2)
+    estado_temporal ; variable que guarda de manera temporal el estado actual
+    sensor_mostrado ; variable para definir el sensor mostrado en plantalla en estado normal
+    keypad_value    ; variable para guardar la tecla presionada fuera de la isr del keypad
+    config_umbral_temp  ; variable temporal para construccion del umbral (nibble alto=decenas, nibble bajo=unidades)
+    umbral_alto_temperatura ; umbral superior de temperatura en BCD (ej: 0x35 = 35 grados)
+    umbral_bajo_temperatura ; umbral inferior de temperatura en BCD (ej: 0x20 = 20 grados)
+    umbral_luz          ; umbral de luminosidad en BCD (ej: 0x50 = 50%)
+endc
+
+cblock 0x70 ; variables de interrupcion compartidas en todos los bancos
+    w_temp          ; variable used for context saving
+    status_temp     ; variable used for context saving
+    pclath_temp     ; variable used for context saving
 endc
 
 ;**********************************************************************
@@ -103,10 +131,25 @@ main
     movwf   display2_value
     movlw   DEBOUNCE_VALUE
     movwf   cont_debounce   ; inicializo el contador del debounce del teclado
-    movlw   d'9'
-    movwf   cont_tests1
     clrf    banderas        ; inicializo el registro de banderas
     bsf     banderas, HABILITAR_TECLADO ; arrancar con el teclado habilitado
+    clrf    estado_actual
+    bsf     estado_actual, NORMAL
+    clrf    estado_temporal
+    clrf    sensor_mostrado
+    bsf     sensor_mostrado, SENSOR_TEMPERATURA
+    movlw   0x35        ; umbral alto temperatura: 35 grados
+    movwf   umbral_alto_temperatura
+    movlw   0x15        ; umbral bajo temperatura: 15 grados
+    movwf   umbral_bajo_temperatura
+    movlw   0x50        ; umbral de luz: 50%
+    movwf   umbral_luz
+    clrf    config_umbral_temp
+
+    ; configuración del oscilador interno
+    banksel OSCCON
+    movlw   b'01100000'     ; Configurar oscilador interno a 4MHz
+    movwf   OSCCON
 
     ; configuracion de pines para usar el display de 7 segmentos
 
@@ -140,7 +183,7 @@ main
     movwf   OPTION_REG
 
     ; cargar valor de recarga para timer0
-
+    banksel TMR0
     movlw   TMR0_VALUE  
     movwf   TMR0
 
@@ -171,15 +214,194 @@ main
 
 
 main_loop
+    btfss   banderas, BUFFER_KEYPAD     ; verifico si hubo un ingreso por teclado
+    goto    main_loop                   ; si no hubo, sigo esperando
 
-    goto main_loop
+    bcf     banderas, BUFFER_KEYPAD     ; bajo la bandera
+
+    ; despachar segun estado actual
+    btfsc   estado_actual, NORMAL
+    goto    loop_estado_normal
+    btfsc   estado_actual, UMBRAL1
+    goto    loop_estado_umbral1
+    goto    loop_estado_umbral2         ; por descarte
+
+; -------------------------------------------------------
+loop_estado_normal
+    ; en estado normal solo A, B, C y * son validas
+    ; las demas fueron filtradas en la ISR
+
+    movf    keypad_value, w
+    xorlw   letraA
+    btfsc   STATUS, Z
+    goto    loop_normal_letraA          ; entrar a config umbral alto temperatura
+
+    movf    keypad_value, w
+    xorlw   letraB
+    btfsc   STATUS, Z
+    goto    loop_normal_letraB          ; entrar a config umbral bajo temperatura
+
+    movf    keypad_value, w
+    xorlw   letraC
+    btfsc   STATUS, Z
+    goto    loop_normal_letraC          ; entrar a config umbral luz
+
+    goto    loop_normal_ast             ; por descarte es simboloAst
+
+loop_normal_letraA
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movf    keypad_value, w             ; recuperar valor del keypad para guardar
+    movwf   estado_temporal             ; guardar que umbral estamos configurando (letraA)
+    ; mostrar 'u' en display0, guiones en display1 y display2
+    movlw   b'00111110'                 ; codigo 7seg de 'U'
+    movwf   display0_value
+    movlw   b'01000000'                 ; codigo 7seg de '-'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_letraB
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movf    keypad_value, w
+    movwf   estado_temporal
+    movlw   b'00111110'
+    movwf   display0_value
+    movlw   b'01000000'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_letraC
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movf    keypad_value, w
+    movwf   estado_temporal
+    movlw   b'00111110'
+    movwf   display0_value
+    movlw   b'01000000'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_normal_ast
+    ; alternar sensor mostrado entre temperatura y luz
+    btfsc   sensor_mostrado, SENSOR_TEMPERATURA
+    goto    loop_ast_cambiar_a_luz
+    clrf    sensor_mostrado
+    bsf     sensor_mostrado, SENSOR_TEMPERATURA
+    goto    main_loop
+loop_ast_cambiar_a_luz
+    clrf    sensor_mostrado
+    bsf     sensor_mostrado, SENSOR_LUZ
+    goto    main_loop
+
+; -------------------------------------------------------
+loop_estado_umbral1
+    ; espera el primer digito (decena) o D para cancelar
+
+    movf    keypad_value, w
+    xorlw   letraD
+    btfsc   STATUS, Z
+    goto    loop_umbral1_cancelar
+
+    ; es un digito numerico: guardarlo como nibble alto de config_umbral_temp
+    ; keypad_value tiene el valor 0-9
+    ; para ponerlo en el nibble alto: swap y AND
+    movf    keypad_value, w
+    movwf   config_umbral_temp          ; guardar temporalmente
+    swapf   config_umbral_temp, f       ; llevar al nibble alto
+    ; display1 muestra el digito ingresado, display2 muestra guion
+    movf    keypad_value, w
+    call    tabla                       ; convertir a codigo 7seg
+    movwf   display1_value
+    movlw   b'01000000'                 ; '-'
+    movwf   display2_value
+    ; avanzar a UMBRAL2
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL2
+    goto    main_loop
+
+loop_umbral1_cancelar
+    clrf    estado_actual
+    bsf     estado_actual, NORMAL
+    clrf    config_umbral_temp
+    goto    main_loop
+
+; -------------------------------------------------------
+loop_estado_umbral2
+    ; espera el segundo digito (unidad) o D para volver a UMBRAL1
+
+    movf    keypad_value, w
+    xorlw   letraD
+    btfsc   STATUS, Z
+    goto    loop_umbral2_volver
+
+    ; es un digito numerico: ponerlo en nibble bajo y cargar el umbral
+    movf    keypad_value, w
+    iorwf   config_umbral_temp, f       ; nibble bajo = unidad, nibble alto ya tenia la decena
+
+    ; mostrar el digito ingresado en display2
+    movf    keypad_value, w
+    call    tabla
+    movwf   display2_value
+
+    ; guardar en el umbral correspondiente segun estado_temporal
+    movf    estado_temporal, w
+    xorlw   letraA
+    btfsc   STATUS, Z
+    goto    loop_umbral2_guardar_alto
+
+    movf    estado_temporal, w
+    xorlw   letraB
+    btfsc   STATUS, Z
+    goto    loop_umbral2_guardar_bajo
+
+    goto    loop_umbral2_guardar_luz     ; por descarte es letraC
+
+loop_umbral2_guardar_alto
+    movf    config_umbral_temp, w
+    movwf   umbral_alto_temperatura
+    goto    loop_umbral2_fin
+
+loop_umbral2_guardar_bajo
+    movf    config_umbral_temp, w
+    movwf   umbral_bajo_temperatura
+    goto    loop_umbral2_fin
+
+loop_umbral2_guardar_luz
+    movf    config_umbral_temp, w
+    movwf   umbral_luz
+    goto    loop_umbral2_fin
+
+loop_umbral2_fin
+    clrf    config_umbral_temp
+    clrf    estado_actual
+    bsf     estado_actual, NORMAL
+    movlw   b'00111111'                 ; restaurar displays a 0 al volver a normal
+    movwf   display0_value
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
+
+loop_umbral2_volver
+    ; D: volver a UMBRAL1, limpiar nibble alto
+    clrf    config_umbral_temp
+    clrf    estado_actual
+    bsf     estado_actual, UMBRAL1
+    movlw   b'01000000'                 ; '-'
+    movwf   display1_value
+    movwf   display2_value
+    goto    main_loop
 
 ; ************************************************************************
 ; Rutina de atencion de interrupcion de timer0
 isr_timer0
-
+    banksel TMR0
     movlw   TMR0_VALUE  ; recargar timer0 para obtener una interrupcion cada 3.33ms
     movwf   TMR0
+    banksel 0
 
 subrutina_debounce
     btfss   banderas, TECLADO_PRESIONADO    ; si no hay tecla pendiente, saltar al multiplexado
@@ -198,7 +420,7 @@ subrutina_debounce
     goto    teclado_aun_presionado          ; Z=0 -> Sigue presionando
 
 teclado_liberado
-    ; la tecla fue soltada y pasó el tiempo de rebote. Habilitamos nueva lectura.
+    ; la tecla fue soltada y paso el tiempo de rebote. Habilitamos nueva lectura.
     movlw   DEBOUNCE_VALUE                  ; recargar contador para el proximo uso
     movwf   cont_debounce
     bsf     banderas, HABILITAR_TECLADO     ; volvemos a aceptar lecturas
@@ -214,15 +436,18 @@ teclado_aun_presionado
 
 subrutina_multiplexado
     banksel PORTE
-    clrf    PORTE       ; apagar todos los displays (evita ghosting)
+    clrf    PORTE           ; apagar todos los displays (evita ghosting)
 
-    ; salto indexado para mostrar el display correspondiente
-    banksel 0
-    movf    display_sel,w   ; cargar display_sel en W para usarlo como indice
-    addwf   PCL, f      ; selecciona el display
-    goto    caso_display0
-    goto    caso_display1
-    goto    caso_display2
+    banksel display_sel     ; asegurarnos de estar en el banco 0
+    movf    display_sel, w
+    btfsc   STATUS, Z
+    goto    caso_display0   ; si es 0, va al display 0
+    
+    xorlw   d'1'
+    btfsc   STATUS, Z
+    goto    caso_display1   ; si era 1, va al display 1
+    
+    goto    caso_display2   ; por descarte es el display 2
 
 caso_display0
     movf    display0_value,w    ; cargar el valor a mostrar en display0
@@ -294,19 +519,19 @@ columna1
     bsf     PORTB, 3
     bcf     PORTB, 0            ; activo solo la fila 1
     btfss   PORTB, C1           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 1
+    goto    tecla1     ; se presiono 1
     bsf     PORTB, 0
     bcf     PORTB, 1            ; activo solo la fila 2
     btfss   PORTB, C1           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 4
+    goto    tecla4     ; se presiono 4
     bsf     PORTB, 1
     bcf     PORTB, 2            ; activo solo la fila 3
     btfss   PORTB, C1           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 7
+    goto    tecla7     ; se presiono 7
     bsf     PORTB, 2
     bcf     PORTB, 3            ; activo solo la fila 4
     btfss   PORTB, C1           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono *
+    goto    teclaAst     ; se presiono *
     goto    fin_isr_keypad      ; caso descarte, finalizar la interrupcion
 
 columna2
@@ -316,19 +541,19 @@ columna2
     bsf     PORTB, 3
     bcf     PORTB, 0            ; activo solo la fila 1
     btfss   PORTB, C2           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 2
+    goto    tecla2     ; se presiono 2
     bsf     PORTB, 0
     bcf     PORTB, 1            ; activo solo la fila 2
     btfss   PORTB, C2           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 5
+    goto    tecla5     ; se presiono 5
     bsf     PORTB, 1
     bcf     PORTB, 2            ; activo solo la fila 3
     btfss   PORTB, C2           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 8
+    goto    tecla8     ; se presiono 8
     bsf     PORTB, 2
     bcf     PORTB, 3            ; activo solo la fila 4
     btfss   PORTB, C2           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 0
+    goto    tecla0     ; se presiono 0
     goto    fin_isr_keypad      ; caso descarte, finalizar la interrupcion
 
 columna3
@@ -338,19 +563,19 @@ columna3
     bsf     PORTB, 3
     bcf     PORTB, 0            ; activo solo la fila 1
     btfss   PORTB, C3           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 3
+    goto    tecla3     ; se presiono 3
     bsf     PORTB, 0
     bcf     PORTB, 1            ; activo solo la fila 2
     btfss   PORTB, C3           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 6
+    goto    tecla6     ; se presiono 6
     bsf     PORTB, 1
     bcf     PORTB, 2            ; activo solo la fila 3
     btfss   PORTB, C3           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono 9
+    goto    tecla9     ; se presiono 9
     bsf     PORTB, 2
     bcf     PORTB, 3            ; activo solo la fila 4
     btfss   PORTB, C3           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono #
+    goto    teclaNum     ; se presiono #
     goto    fin_isr_keypad      ; caso descarte, finalizar la interrupcion
 
 columna4
@@ -360,32 +585,152 @@ columna4
     bsf     PORTB, 3
     bcf     PORTB, 0            ; activo solo la fila 1
     btfss   PORTB, C4           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono A
+    goto    teclaA     ; se presiono A
     bsf     PORTB, 0
     bcf     PORTB, 1            ; activo solo la fila 2
     btfss   PORTB, C4           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono B
+    goto    teclaB     ; se presiono B
     bsf     PORTB, 1
     bcf     PORTB, 2            ; activo solo la fila 3
     btfss   PORTB, C4           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono C
+    goto    teclaC     ; se presiono C
     bsf     PORTB, 2
     bcf     PORTB, 3            ; activo solo la fila 4
     btfss   PORTB, C4           ; reviso si la lectura persiste
-    goto    no_implementado     ; se presiono D
+    goto    teclaD     ; se presiono D
     goto    fin_isr_keypad      ; caso descarte, finalizar la interrupcion
 
-no_implementado
-    banksel 0
-    movf    cont_tests1, w      ; se le agrega ', w' para que guarde en W
-    call    tabla
-    movwf   display0_value
-    decfsz  cont_tests1,f
-    goto    fin_isr_keypad
-    movlw   d'9'
-    movwf   cont_tests1
+tecla1
+    btfsc   estado_actual, NORMAL   ; verifico no estar en el estado base
+    goto fin_isr_keypad             ; salgo si estoy
 
-    goto    fin_isr_keypad
+    movlw   d'1'
+    movwf   keypad_value            ; guardo el valor en el buffer del keypad
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+    goto fin_isr_keypad
+
+tecla2
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'2'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla3
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'3'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla4
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'4'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla5
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'5'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla6
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'6'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla7
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'7'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla8
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'8'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla9
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'9'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+tecla0
+    btfsc   estado_actual, NORMAL
+    goto fin_isr_keypad
+
+    movlw   d'0'
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD
+    goto fin_isr_keypad
+teclaA
+    btfss   estado_actual, NORMAL   ; me aseguro de estar en el modo base
+    goto fin_isr_keypad             ; salgo si no estoy en modo base
+
+    movlw   letraA                  ; guardo el valor en el buffer del keypad
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+
+    goto fin_isr_keypad
+
+teclaB
+    btfss   estado_actual, NORMAL   ; me aseguro de estar en el modo base
+    goto fin_isr_keypad             ; salgo si no estoy en modo base
+
+    movlw   letraB                  ; guardo el valor en el buffer del keypad
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+
+    goto fin_isr_keypad
+teclaC
+    btfss   estado_actual, NORMAL   ; me aseguro de estar en el modo base
+    goto fin_isr_keypad             ; salgo si no estoy en modo base
+
+    movlw   letraC                  ; guardo el valor en el buffer del keypad
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+
+    goto fin_isr_keypad
+teclaD
+    btfsc   estado_actual, NORMAL   ; verifico estar en algun estado de umbral
+    goto    fin_isr_keypad          ; salgo si no lo estoy
+
+    movlw   letraD                  ; guardo el valor en el buffer del keypad
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+
+    goto fin_isr_keypad
+
+teclaAst
+    btfss   estado_actual, NORMAL   ; verifico que estoy en el modo base
+    goto fin_isr_keypad             ; si no estoy en estado base, salgo
+
+    movlw   simboloAst                  ; guardo el valor en el buffer del keypad
+    movwf   keypad_value
+    bsf     banderas, BUFFER_KEYPAD ; aviso que el buffer cambio
+
+    goto fin_isr_keypad
+    
+teclaNum
+    goto fin_isr_keypad ; no implementado
 
 fin_isr_keypad
     banksel PORTB
@@ -394,4 +739,6 @@ fin_isr_keypad
     banksel INTCON
     bcf  INTCON, RBIF   ; limpiar bandera de interrupcion por cambio de estado en puerto B
     goto fin_isr
+; fin de la rutina de atencion de interrupcion del puerto B (keypad)    
+; ************************************************************************
     END
