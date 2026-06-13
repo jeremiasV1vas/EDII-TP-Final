@@ -258,6 +258,7 @@ main_loop
     btfss   banderas, LEER_ADC
     goto    revisar_teclado
     
+; ***********************************************************
     bcf     banderas, LEER_ADC
     bsf     ADCON0, GO
 esperar_adc
@@ -280,7 +281,8 @@ guardar_an1
     bcf     adc_canal_actual, 0 
     movlw   b'01000001'     ; preparar ch0
     movwf   ADCON0
-
+; ***********************************************************
+; verificacion de teclado
 revisar_teclado
     btfss   banderas, BUFFER_KEYPAD
     goto    actualizar_pantalla
@@ -294,6 +296,7 @@ revisar_teclado
     goto    loop_estado_umbral1
     goto    loop_estado_umbral2
 
+; refresco de valores actuales en display
 actualizar_pantalla
     ; solo actualizamos lecturas vivas si estamos en estado normal
     btfss   estado_actual, NORMAL
@@ -305,6 +308,7 @@ actualizar_pantalla
 
 mostrar_temp
     ; temp_real = adc_temperatura * 2
+    ; por medio de rotacion a la izquierda de bits
     bcf     STATUS, C
     rlf     adc_temperatura, w
     
@@ -335,7 +339,7 @@ mostrar_luz
     ; calculamos el porcentaje de luz actual
     call    calcular_porcentaje_luz
     
-    ; --- FILTRO ANTIDESBORDE DE LUZ ---
+    ; --- FILTRO ANTIDESBORDE DE LUZ --- (igual que el anterior)
     movf    luz_porcentaje, w
     movwf   math_temp
     sublw   d'99'
@@ -361,60 +365,61 @@ bcd_l:
 
 ; -------------------------------------------------------
 loop_estado_normal
+    ; veo que letra se presiono
     movf    keypad_value, w
     xorlw   letraA
     btfsc   STATUS, Z
-    goto    loop_normal_letraA
+    goto    loop_normal_letraA  ; se presiono A
 
     movf    keypad_value, w
     xorlw   letraB
     btfsc   STATUS, Z
-    goto    loop_normal_letraB
+    goto    loop_normal_letraB  ; se presiono B
 
     movf    keypad_value, w
     xorlw   letraC
     btfsc   STATUS, Z
-    goto    loop_normal_letraC
+    goto    loop_normal_letraC  ; se presiono C
 
-    goto    loop_normal_ast
+    goto    loop_normal_ast     ; por descarte se presiono *
 
 loop_normal_letraA
-    clrf    estado_actual
+    clrf    estado_actual           ; cambia el estado actual por umbral 1
     bsf     estado_actual, UMBRAL1
-    movf    keypad_value, w
+    movf    keypad_value, w         ; guarda la lectura en una variable temporal
     movwf   estado_temporal
-    movlw   b'00111110'                 ; 'U'
+    movlw   b'00111110'                 ; muestro en display 'U'
     movwf   display0_value
-    movlw   b'01000000'                 ; '-'
+    movlw   b'01000000'                 ; muestro en display '-'
     movwf   display1_value
     movwf   display2_value
-    clrf    keypad_value
+    clrf    keypad_value                ; limpio la lectura
     goto    main_loop
 
 loop_normal_letraB
-    clrf    estado_actual
+    clrf    estado_actual           ; cambia el estado actual por umbral 1
     bsf     estado_actual, UMBRAL1
-    movf    keypad_value, w
+    movf    keypad_value, w         ; guarda la lectura en una variable temporal
     movwf   estado_temporal
-    movlw   b'00111110'                 ; 'U'
+    movlw   b'00111110'                 ; muestro en display 'U'
     movwf   display0_value
-    movlw   b'01000000'                 ; '-'
+    movlw   b'01000000'                 ; muestro en display '-'
     movwf   display1_value
     movwf   display2_value
-    clrf    keypad_value
+    clrf    keypad_value                ; limpio la lectura
     goto    main_loop
 
 loop_normal_letraC
-    clrf    estado_actual
+    clrf    estado_actual           ; cambia el estado actual por umbral 1
     bsf     estado_actual, UMBRAL1
-    movf    keypad_value, w
+    movf    keypad_value, w         ; guarda la lectura en una variable temporal
     movwf   estado_temporal
-    movlw   b'00111110'                 ; 'U'
+    movlw   b'00111110'                 ; muestro en display 'U'
     movwf   display0_value
-    movlw   b'01000000'                 ; '-'
+    movlw   b'01000000'                 ; muestro en display '-'
     movwf   display1_value
     movwf   display2_value
-    clrf    keypad_value
+    clrf    keypad_value                ; limpio la lectura
     goto    main_loop
 
 loop_normal_ast
@@ -434,10 +439,10 @@ loop_ast_cambiar_a_luz
 
 ; -------------------------------------------------------
 loop_estado_umbral1
-    movf    keypad_value, w
+    movf    keypad_value, w     ; veo si se cancelo la modificacion
     xorlw   letraD
     btfsc   STATUS, Z
-    goto    loop_umbral1_cancelar
+    goto    loop_umbral1_cancelar   ; si se presiono D cancelo la modificacion de umbral
 
     ; validar si es numero (0-9)
     movf    keypad_value, w
@@ -445,93 +450,93 @@ loop_estado_umbral1
     btfss   STATUS, C
     goto    main_loop       
 
+    movf    keypad_value, w             ; leo el numero ingresado
+    movwf   config_umbral_temp          ; lo guardo en la variable temporal
+    swapf   config_umbral_temp, f       ; hago swap ya que es la decena y lo quiero en el nibble superior
     movf    keypad_value, w
-    movwf   config_umbral_temp
-    swapf   config_umbral_temp, f
-    movf    keypad_value, w
-    call    tabla
+    call    tabla                       ; hace un call a tabla para mostrar el valor en los displays
     movwf   display1_value
-    movlw   b'01000000'                 ; '-'
+    movlw   b'01000000'                 ; muestro '-'
     movwf   display2_value
-    clrf    estado_actual
+    clrf    estado_actual               ; cambio el estado a umbral 2
     bsf     estado_actual, UMBRAL2
     clrf    keypad_value
     goto    main_loop
 
 loop_umbral1_cancelar
-    clrf    estado_actual
+    clrf    estado_actual           ; vuelvo a cambiar a estado normal
     bsf     estado_actual, NORMAL
-    clrf    config_umbral_temp
-    clrf    keypad_value
+    clrf    config_umbral_temp      ; borro la config de umbral temporal
+    clrf    keypad_value            ; limpio el registro de lectura
     goto    main_loop
 
 ; -------------------------------------------------------
 loop_estado_umbral2
-    movf    keypad_value, w
+    movf    keypad_value, w         ; veo si se cancelo la modificacion
     xorlw   letraD
     btfsc   STATUS, Z
-    goto    loop_umbral2_volver
+    goto    loop_umbral2_volver     ; si se presiono D, vuelvo a umbral 1
 
-    movf    keypad_value, w
+    movf    keypad_value, w         ; verifico que se ingreso un numero del 0-9
     sublw   d'9'
     btfss   STATUS, C
     goto    main_loop       
 
-    movf    keypad_value, w
+    movf    keypad_value, w         ; agrego el valor al nibble inferior de la variable temporal
     iorwf   config_umbral_temp, f
     movf    keypad_value, w
-    call    tabla
+    call    tabla                   ; llamo a tabla para cambiar el valor de display 
     movwf   display2_value
 
-    ; aqui procesamos el bcd a 8 bits usando la rutina adaptada
+    ; aqui procesamos el bcd a 8 bits
     call    convertir_bcd_8bit
 
     ; guardar en la variable correcta
     movf    estado_temporal, w
     xorlw   letraA
     btfsc   STATUS, Z
-    goto    loop_umbral2_guardar_alto
+    goto    loop_umbral2_guardar_alto   ; si fue A, se guarda en el umbral de temperatura alto
 
     movf    estado_temporal, w
     xorlw   letraB
     btfsc   STATUS, Z
-    goto    loop_umbral2_guardar_bajo
+    goto    loop_umbral2_guardar_bajo   ; si fue B, se guarda en el umbral de temperatura bajo
 
-    goto    loop_umbral2_guardar_luz
+    goto    loop_umbral2_guardar_luz    ; por defecto fue C, y se guarda en el umbral de luz
 
-loop_umbral2_guardar_alto
-    movf    config_umbral_temp, w
+loop_umbral2_guardar_alto       
+    movf    config_umbral_temp, w       ; paso el valor en bcd al registro de umbral 
     movwf   umbral_alto_temperatura
-    movf    umbral_8bit_tmp, w
+    movf    umbral_8bit_tmp, w          ; paso el valor ya en binario al registro de umbral en 8 bits
     movwf   umbral_alto_temp_8bit       
     goto    loop_umbral2_fin
 
 loop_umbral2_guardar_bajo
-    movf    config_umbral_temp, w
+    movf    config_umbral_temp, w       ; paso el valor en bcd al registro de umbral 
     movwf   umbral_bajo_temperatura
-    movf    umbral_8bit_tmp, w
+    movf    umbral_8bit_tmp, w          ; paso el valor ya en binario al registro de umbral en 8 bits
     movwf   umbral_bajo_temp_8bit
     goto    loop_umbral2_fin
 
 loop_umbral2_guardar_luz
-    movf    config_umbral_temp, w
+    movf    config_umbral_temp, w       ; paso el valor en bcd al registro de umbral 
     movwf   umbral_luz
-    movf    umbral_8bit_tmp, w
+    movf    umbral_8bit_tmp, w          ; paso el valor ya en binario al registro de umbral en 8 bits
     movwf   umbral_luz_8bit
     goto    loop_umbral2_fin
 
 loop_umbral2_fin
-    clrf    config_umbral_temp
+    clrf    config_umbral_temp      ; limpio variables temporales
     clrf    estado_actual
-    bsf     estado_actual, NORMAL
+    bsf     estado_actual, NORMAL   ; vuelvo a modo normal, modificacion finalizada
     clrf    keypad_value
     goto    main_loop
 
 loop_umbral2_volver
-    clrf    config_umbral_temp
+    clrf    config_umbral_temp      ; limpio variables temporales
     clrf    estado_actual
-    bsf     estado_actual, UMBRAL1
-    movlw   b'01000000'
+    bsf     estado_actual, UMBRAL1  ; vuelvo a umbral 1
+    movlw   b'01000000'             ; escribo un '-' nuevamente
     movwf   display1_value
     movwf   display2_value
     clrf    keypad_value
@@ -617,16 +622,16 @@ sumar_unidades_bcd
 ; Rutina de atencion de interrupcion de timer0
 isr_timer0
     banksel TMR0
-    movlw   TMR0_VALUE  
+    movlw   TMR0_VALUE      ; recargo timer0
     movwf   TMR0
     banksel 0
     
-    decfsz  cont_adc, f
-    goto    subrutina_debounce  
+    decfsz  cont_adc, f         ; si ya pasaron los ciclos suficientes, leo por adc
+    goto    subrutina_debounce  ; sino sigo con la subrutina de debounce del teclado
     
-    movlw   TICKS_MEDIO_SEG
+    movlw   TICKS_MEDIO_SEG     ; reseteo el contador del adc
     movwf   cont_adc
-    bsf     banderas, LEER_ADC
+    bsf     banderas, LEER_ADC  ; habilito la bandera que permite la lectura de adc en el main loop
 
 subrutina_debounce
     btfss   banderas, TECLADO_PRESIONADO
