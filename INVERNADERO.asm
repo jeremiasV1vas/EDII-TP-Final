@@ -70,11 +70,20 @@ cblock 0x20 ; inicio de bloque de variables en banco 0
     adc_temperatura     ; valor de 8 bits de la lectura de temperatura
     adc_luz             ; valor de 8 bits de la lectura de luz
     
-    ; variables temporales para la subrutina de conversion bcd a 8bit
+    ; variables temporales para conversiones y matematicas
     unidades_tmp
     decenas_tmp
     porcentaje_tmp
     umbral_8bit_tmp
+    bcd_decenas         ; decenas calculadas desde binario
+    bcd_unidades        ; unidades calculadas desde binario
+    math_temp           ; registro temporal para bucles de resta
+    
+    ; variables para el calculo de porcentaje de luz
+    acc_hi              ; byte alto del acumulador (resultado del porcentaje)
+    acc_lo              ; byte bajo del acumulador
+    loop_cnt            ; contador para el bucle de multiplicacion
+    luz_porcentaje      ; guarda el valor final 0-99
 endc
 
 cblock 0x70 ; variables de interrupcion compartidas en todos los bancos
@@ -117,11 +126,7 @@ ORG 0x020
 
 tabla
     ; tabla de conversion de numeros a display de 7 segmentos
-    ; el orden de los segmentos es: a, b, c, d, e, f, g, dp
-    ; se considera que el bit 0 es a y el bit 7 es dp
-    ; entonces el orden es : dp g f e d c b a
-    ; se utiliza logica positiva, es decir, un bit en 1 enciende el segmento correspondiente
-
+    ; se considera que el bit 0 es a y el bit 7 es dp (logica positiva)
     addwf   PCL, f
     retlw   b'00111111' ; 0
     retlw   b'00000110' ; 1
@@ -137,7 +142,6 @@ tabla
 ORG 0x100
 tabla_bcd_adc
     ; tabla para mapear porcentaje a valor adc de 8 bits
-    ; atencion: se aloja en 0x100 para evitar desbordes de pcl
     addwf   PCL, f
     dt   0,   3,   5,   8,  10,  13,  15,  18,  21,  23
     dt  26,  28,  31,  33,  36,  39,  41,  44,  46,  49
@@ -163,18 +167,18 @@ main
     banksel 0
     movlw   d'2'
     movwf   display_sel
-    movlw   b'00111111'     ; valor para mostrar el numero 0 en el display
+    movlw   b'00111111'     ; valor inicial (000)
     movwf   display0_value
     movwf   display1_value
     movwf   display2_value
     
     movlw   DEBOUNCE_VALUE
-    movwf   cont_debounce   ; inicializo el contador del debounce del teclado
+    movwf   cont_debounce
     movlw   TICKS_MEDIO_SEG
-    movwf   cont_adc        ; inicializo temporizador de medio segundo
+    movwf   cont_adc
     
-    clrf    banderas        ; inicializo el registro de banderas
-    bsf     banderas, HABILITAR_TECLADO ; arrancar con el teclado habilitado
+    clrf    banderas
+    bsf     banderas, HABILITAR_TECLADO
     
     clrf    estado_actual
     bsf     estado_actual, NORMAL
@@ -182,15 +186,17 @@ main
     clrf    sensor_mostrado
     bsf     sensor_mostrado, SENSOR_TEMPERATURA
     clrf    config_umbral_temp
-    clrf    adc_canal_actual ; arrancar leyendo an0
+    clrf    adc_canal_actual
+    clrf    adc_temperatura
+    clrf    adc_luz
 
-    ; configuracion de pines para usar el display de 7 segmentos
+    ; configuracion de pines para display
     banksel TRISD
     clrf    TRISD
     banksel PORTD
     clrf    PORTD
 
-    ; configuracion del puerto E para seleccionar el display a mostrar
+    ; configuracion puerto E
     banksel ANSEL
     bcf     ANSEL,7
     bcf     ANSEL,6
@@ -202,21 +208,21 @@ main
 
     ; configuracion inicial de adc
     banksel ADCON1
-    movlw   0x00            ; justificacion izquierda (8 msb en adresh), vref=vdd/vss
+    movlw   0x00            ; justificacion izquierda, vref=vdd
     movwf   ADCON1
     banksel TRISA
-    bsf     TRISA, 0        ; ra0 como entrada
-    bsf     TRISA, 1        ; ra1 como entrada
+    bsf     TRISA, 0        ; ra0 (temperatura)
+    bsf     TRISA, 1        ; ra1 (luz)
     banksel ANSEL
-    movlw   b'00000011'     ; an0 y an1 como entradas analogicas
+    movlw   b'00000011'     ; an0 y an1 analógicos
     movwf   ANSEL
     banksel ANSELH
-    clrf    ANSELH          ; pines superiores digitales
+    clrf    ANSELH
     banksel ADCON0
-    movlw   b'01000001'     ; fosc/8, selecciono an0, enciendo modulo adc
+    movlw   b'01000001'     ; fosc/8, ch0, adc on
     movwf   ADCON0
 
-    ; configuracion de timer0
+    ; configuracion timer0
     banksel OPTION_REG
     movlw   b'01000100'     ; prescaler 1:32, reloj interno
     movwf   OPTION_REG
@@ -224,71 +230,134 @@ main
     movlw   TMR0_VALUE  
     movwf   TMR0
 
-    ; configuracion de interrupciones para keypad 4x4
+    ; configuracion keypad 4x4
     banksel TRISB
-    movlw   b'11110000'     ; configurar rb4-rb7 como entradas
+    movlw   b'11110000'
     movwf   TRISB
     banksel PORTB
     clrf    PORTB
     banksel IOCB
-    movlw   b'11110000'     ; habilitar interrupciones rb4-rb7
+    movlw   b'11110000'
     movwf   IOCB
     banksel WPUB
-    movlw   b'11110000'     ; habilitar pull-ups rb4-rb7
+    movlw   b'11110000'
     movwf   WPUB
 
     ; habilitar interrupciones
     banksel INTCON
     clrf    INTCON
-    bsf     INTCON, TMR0IE  ; habilitar interrupcion de timer0
-    bsf     INTCON, RBIE    ; habilitar interrupcion puerto b
-    bsf     INTCON, GIE     ; interrupciones globales
+    bsf     INTCON, TMR0IE
+    bsf     INTCON, RBIE
+    bsf     INTCON, GIE
 
     goto main_loop
 
 
 main_loop
-    ; verificacion de polling de adc
+    ; bloque de lectura ciclica de adc
     btfss   banderas, LEER_ADC
     goto    revisar_teclado
     
     bcf     banderas, LEER_ADC
-    ; disparamos lectura del canal configurado
     bsf     ADCON0, GO
 esperar_adc
     btfsc   ADCON0, GO
-    goto    esperar_adc     ; bloqueamos muy pocos microsegundos, no afecta al display
+    goto    esperar_adc
     
-    ; guardamos lectura
     movf    ADRESH, w
     btfsc   adc_canal_actual, 0
     goto    guardar_an1
 
 guardar_an0
-    movwf   adc_temperatura ; es an0
-    bsf     adc_canal_actual, 0 ; preparamos para leer an1 la proxima
-    movlw   b'01000101'     ; fosc/8, ch1, adc on
+    movwf   adc_temperatura 
+    bsf     adc_canal_actual, 0 
+    movlw   b'01000101'     ; preparar ch1
     movwf   ADCON0
     goto    revisar_teclado
 
 guardar_an1
-    movwf   adc_luz         ; es an1
-    bcf     adc_canal_actual, 0 ; preparamos para leer an0 la proxima
-    movlw   b'01000001'     ; fosc/8, ch0, adc on
+    movwf   adc_luz         
+    bcf     adc_canal_actual, 0 
+    movlw   b'01000001'     ; preparar ch0
     movwf   ADCON0
 
 revisar_teclado
-    btfss   banderas, BUFFER_KEYPAD     ; verifico si hubo un ingreso
-    goto    main_loop                   ; si no hubo, sigo esperando
+    btfss   banderas, BUFFER_KEYPAD
+    goto    actualizar_pantalla
 
-    bcf     banderas, BUFFER_KEYPAD     ; bajo la bandera
+    bcf     banderas, BUFFER_KEYPAD
 
-    ; despachar segun estado actual
+    ; despachador principal de estados
     btfsc   estado_actual, NORMAL
     goto    loop_estado_normal
     btfsc   estado_actual, UMBRAL1
     goto    loop_estado_umbral1
-    goto    loop_estado_umbral2         ; por descarte
+    goto    loop_estado_umbral2
+
+actualizar_pantalla
+    ; solo actualizamos lecturas vivas si estamos en estado normal
+    btfss   estado_actual, NORMAL
+    goto    main_loop
+
+    btfsc   sensor_mostrado, SENSOR_TEMPERATURA
+    goto    mostrar_temp
+    goto    mostrar_luz
+
+mostrar_temp
+    ; temp_real = adc_temperatura * 2
+    bcf     STATUS, C
+    rlf     adc_temperatura, w
+    
+    ; --- FILTRO ANTIDESBORDE DE TEMPERATURA ---
+    movwf   math_temp       ; Guardo el valor original
+    sublw   d'99'           ; Resto: 99 - W
+    btfss   STATUS, C       ; Si C=0, el valor original era mayor a 99
+    goto    limitar_t
+    movf    math_temp, w    ; Si era <= 99, recupero el valor original
+    goto    bcd_t
+limitar_t
+    movlw   d'99'           ; Lo clavo en 99 máximo para proteger la tabla
+bcd_t:
+    ; ------------------------------------------
+    call    bin_a_bcd
+
+    movlw   b'01111000'                 ; 't' en 7seg
+    movwf   display0_value
+    movf    bcd_decenas, w
+    call    tabla
+    movwf   display1_value
+    movf    bcd_unidades, w
+    call    tabla
+    movwf   display2_value
+    goto    main_loop
+
+mostrar_luz
+    ; calculamos el porcentaje de luz actual
+    call    calcular_porcentaje_luz
+    
+    ; --- FILTRO ANTIDESBORDE DE LUZ ---
+    movf    luz_porcentaje, w
+    movwf   math_temp
+    sublw   d'99'
+    btfss   STATUS, C
+    goto    limitar_l
+    movf    math_temp, w
+    goto    bcd_l
+limitar_l
+    movlw   d'99'
+bcd_l:
+    ; ----------------------------------
+    call    bin_a_bcd
+
+    movlw   b'00111000'                 ; 'L' en 7seg
+    movwf   display0_value
+    movf    bcd_decenas, w
+    call    tabla
+    movwf   display1_value
+    movf    bcd_unidades, w
+    call    tabla
+    movwf   display2_value
+    goto    main_loop
 
 ; -------------------------------------------------------
 loop_estado_normal
@@ -314,11 +383,12 @@ loop_normal_letraA
     bsf     estado_actual, UMBRAL1
     movf    keypad_value, w
     movwf   estado_temporal
-    movlw   b'00111110'                 ; 'u'
+    movlw   b'00111110'                 ; 'U'
     movwf   display0_value
     movlw   b'01000000'                 ; '-'
     movwf   display1_value
     movwf   display2_value
+    clrf    keypad_value
     goto    main_loop
 
 loop_normal_letraB
@@ -326,11 +396,12 @@ loop_normal_letraB
     bsf     estado_actual, UMBRAL1
     movf    keypad_value, w
     movwf   estado_temporal
-    movlw   b'00111110'
+    movlw   b'00111110'                 ; 'U'
     movwf   display0_value
-    movlw   b'01000000'
+    movlw   b'01000000'                 ; '-'
     movwf   display1_value
     movwf   display2_value
+    clrf    keypad_value
     goto    main_loop
 
 loop_normal_letraC
@@ -338,22 +409,27 @@ loop_normal_letraC
     bsf     estado_actual, UMBRAL1
     movf    keypad_value, w
     movwf   estado_temporal
-    movlw   b'00111110'
+    movlw   b'00111110'                 ; 'U'
     movwf   display0_value
-    movlw   b'01000000'
+    movlw   b'01000000'                 ; '-'
     movwf   display1_value
     movwf   display2_value
+    clrf    keypad_value
     goto    main_loop
 
 loop_normal_ast
+    ; Alternar sensor mostrado al tocar el asterisco
     btfsc   sensor_mostrado, SENSOR_TEMPERATURA
     goto    loop_ast_cambiar_a_luz
     clrf    sensor_mostrado
     bsf     sensor_mostrado, SENSOR_TEMPERATURA
+    clrf    keypad_value
     goto    main_loop
+    
 loop_ast_cambiar_a_luz
     clrf    sensor_mostrado
     bsf     sensor_mostrado, SENSOR_LUZ
+    clrf    keypad_value
     goto    main_loop
 
 ; -------------------------------------------------------
@@ -367,7 +443,7 @@ loop_estado_umbral1
     movf    keypad_value, w
     sublw   d'9'
     btfss   STATUS, C
-    goto    main_loop       ; si no es numero ignorar
+    goto    main_loop       
 
     movf    keypad_value, w
     movwf   config_umbral_temp
@@ -386,10 +462,7 @@ loop_umbral1_cancelar
     clrf    estado_actual
     bsf     estado_actual, NORMAL
     clrf    config_umbral_temp
-    movlw   b'00111111'
-    movwf   display0_value
-    movwf   display1_value
-    movwf   display2_value
+    clrf    keypad_value
     goto    main_loop
 
 ; -------------------------------------------------------
@@ -402,7 +475,7 @@ loop_estado_umbral2
     movf    keypad_value, w
     sublw   d'9'
     btfss   STATUS, C
-    goto    main_loop       ; si no es numero ignorar
+    goto    main_loop       
 
     movf    keypad_value, w
     iorwf   config_umbral_temp, f
@@ -410,10 +483,10 @@ loop_estado_umbral2
     call    tabla
     movwf   display2_value
 
-    ; aqui procesamos el bcd recien armado a un formato comparador de 8 bits
+    ; aqui procesamos el bcd a 8 bits usando la rutina adaptada
     call    convertir_bcd_8bit
 
-    ; guardar en el umbral correspondiente
+    ; guardar en la variable correcta
     movf    estado_temporal, w
     xorlw   letraA
     btfsc   STATUS, Z
@@ -430,7 +503,7 @@ loop_umbral2_guardar_alto
     movf    config_umbral_temp, w
     movwf   umbral_alto_temperatura
     movf    umbral_8bit_tmp, w
-    movwf   umbral_alto_temp_8bit       ; guardamos el valor crudo
+    movwf   umbral_alto_temp_8bit       
     goto    loop_umbral2_fin
 
 loop_umbral2_guardar_bajo
@@ -451,10 +524,6 @@ loop_umbral2_fin
     clrf    config_umbral_temp
     clrf    estado_actual
     bsf     estado_actual, NORMAL
-    movlw   b'00111111'
-    movwf   display0_value
-    movwf   display1_value
-    movwf   display2_value
     clrf    keypad_value
     goto    main_loop
 
@@ -465,17 +534,60 @@ loop_umbral2_volver
     movlw   b'01000000'
     movwf   display1_value
     movwf   display2_value
+    clrf    keypad_value
     goto    main_loop
 
+
 ; ************************************************************************
-; Subrutina BCD a 8-Bits (adaptacion del codigo de tu amigo)
+; Subrutina ADC a Porcentaje (Luz)
+; Multiplica adc_luz * 100 sumandolo en un acumulador de 16 bits.
+; El byte alto (High Byte) es el resultado automatico de dividir por 256.
+calcular_porcentaje_luz
+    clrf    acc_hi
+    clrf    acc_lo
+    movf    adc_luz, w
+    btfsc   STATUS, Z
+    goto    fin_adc_porcentaje      ; si es 0, dejamos luz_porcentaje en 0
+    movwf   loop_cnt                ; cargamos cantidad de veces a sumar
+suma_100
+    movlw   d'100'
+    addwf   acc_lo, f               ; sumamos al byte bajo
+    btfsc   STATUS, C               ; si hay carry...
+    incf    acc_hi, f               ; incrementamos byte alto
+    decfsz  loop_cnt, f             ; repetimos segun el valor leido del adc
+    goto    suma_100
+fin_adc_porcentaje
+    movf    acc_hi, w               ; cargamos el resultado de la division
+    movwf   luz_porcentaje
+    return
+
+
+; ************************************************************************
+; Subrutina Binario a BCD para Displays (acepta valores de 0 a 99 desde W)
+bin_a_bcd
+    movwf   math_temp               ; W contiene el valor a dividir
+    clrf    bcd_decenas
+restar_10
+    movlw   d'10'
+    subwf   math_temp, w
+    btfss   STATUS, C               ; si c=0 el resultado fue negativo
+    goto    fin_bcd
+    movwf   math_temp               ; actualizamos el saldo
+    incf    bcd_decenas, f          ; sumamos una decena
+    goto    restar_10
+fin_bcd
+    movf    math_temp, w            ; el resto son las unidades
+    movwf   bcd_unidades
+    return
+
+
+; ************************************************************************
+; Subrutina BCD a 8-Bits
 convertir_bcd_8bit
-    ; 1. aislar decenas
     movf    config_umbral_temp, w
     andlw   0xF0
     movwf   decenas_tmp
     swapf   decenas_tmp, f
-    ; 2. aislar unidades
     movf    config_umbral_temp, w
     andlw   0x0F
     movwf   unidades_tmp
@@ -484,25 +596,21 @@ convertir_bcd_8bit
     movf    decenas_tmp, w
     btfsc   STATUS, Z
     goto    sumar_unidades_bcd
-
 bucle_por_diez
     movlw   d'10'
     addwf   porcentaje_tmp, f
     decfsz  decenas_tmp, f
     goto    bucle_por_diez
-
 sumar_unidades_bcd
     movf    unidades_tmp, w
     addwf   porcentaje_tmp, f
     
-    ; 3. mapear el porcentaje en la tabla
-    movlw   HIGH(tabla_bcd_adc) ; vital para que pclath no rompa el salto
+    movlw   HIGH(tabla_bcd_adc) 
     movwf   PCLATH
     movf    porcentaje_tmp, w
     call    tabla_bcd_adc
-    clrf    PCLATH              ; devolver a 0
+    clrf    PCLATH              
     movwf   umbral_8bit_tmp
-    
     return
 
 ; ************************************************************************
@@ -513,11 +621,9 @@ isr_timer0
     movwf   TMR0
     banksel 0
     
-    ; actualizacion del reloj del adc
     decfsz  cont_adc, f
-    goto    subrutina_debounce  ; aun no son 500ms
+    goto    subrutina_debounce  
     
-    ; pasaron 500ms
     movlw   TICKS_MEDIO_SEG
     movwf   cont_adc
     bsf     banderas, LEER_ADC
@@ -712,7 +818,6 @@ columna4
 tecla1
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'1'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
@@ -721,79 +826,78 @@ tecla1
 tecla2
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'2'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla3
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'3'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla4
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'4'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla5
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'5'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla6
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'6'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla7
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'7'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla8
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'8'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla9
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'9'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 tecla0
     btfsc   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   d'0'
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 teclaA
     btfss   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   letraA
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
@@ -802,23 +906,22 @@ teclaA
 teclaB
     btfss   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   letraB
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 teclaC
     btfss   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   letraC
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
     goto fin_isr_keypad
+
 teclaD
     btfsc   estado_actual, NORMAL
     goto    fin_isr_keypad
-
     movlw   letraD
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
@@ -827,7 +930,6 @@ teclaD
 teclaAst
     btfss   estado_actual, NORMAL
     goto fin_isr_keypad
-
     movlw   simboloAst
     movwf   keypad_value
     bsf     banderas, BUFFER_KEYPAD
