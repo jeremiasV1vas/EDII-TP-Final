@@ -1,36 +1,36 @@
 list        p=16f887        ; directiva para definir el procesador
-    #include    <p16f887.inc>   ; definiciones de variables especificas del procesador
+    #include    <p16f887.inc>   ; definiciones de registros y variables especificas del microcontrolador
 
 
-; directivas de configuracion del microcontrolador
+; directivas de configuracion (fuses)
     __CONFIG    _CONFIG1, _LVP_OFF & _FCMEN_ON & _IESO_OFF & _BOR_OFF & _CPD_OFF & _CP_OFF & _MCLRE_ON & _PWRTE_ON & _WDT_OFF & _INTRC_OSC_NOCLKOUT
     __CONFIG    _CONFIG2, _WRT_OFF & _BOR21V
 
 
 
 ; ***** DEFINICIONES CONSTANTES *****
-#DEFINE TMR0_VALUE d'152'       ; valor de recarga para timer0 (prescaler 1:32, Fosc=4MHz -> interrupcion cada 3.33ms)
-#DEFINE DEBOUNCE_VALUE d'15'    ; cantidad de ciclos de timer0 para validar un rebote (15 ciclos = ~50ms)
+#DEFINE TMR0_VALUE d'152'       ; valor de recarga para timer0 (prescaler 1:32, Fosc=4MHz -> interrupcion cada ~3.33ms)
+#DEFINE DEBOUNCE_VALUE d'15'    ; cantidad de ciclos de timer0 para validar un rebote mecanico (15 ciclos = ~50ms)
 #DEFINE TICKS_MEDIO_SEG d'150'  ; cantidad de interrupciones de timer0 para alcanzar medio segundo (150 * 3.33ms)
 
-; definicion de banderas del registro "banderas"
-#DEFINE TECLADO_PRESIONADO d'0' ; estado del teclado: 0 = no presionado, 1 = presionado
-#DEFINE HABILITAR_TECLADO d'1'  ; bandera para habilitar la lectura en la interrupcion del puerto B
-#DEFINE BUFFER_KEYPAD d'2'      ; bandera para indicar que hay una tecla guardada lista para procesar
-#DEFINE LEER_ADC d'3'           ; bandera para indicar que transcurrieron 500ms y se debe muestrear el adc
+; definicion de bits para el registro de banderas de control
+#DEFINE TECLADO_PRESIONADO d'0' ; estado logico del teclado: 0 = en reposo, 1 = tecla en validacion
+#DEFINE HABILITAR_TECLADO d'1'  ; bandera para habilitar la captura en la interrupcion del puerto B
+#DEFINE BUFFER_KEYPAD d'2'      ; bandera para notificar al flujo principal que existe una tecla pendiente
+#DEFINE LEER_ADC d'3'           ; bandera temporizada para disparar el muestreo de los sensores analogicos
 
-; definicion de pines del puerto B usados como columnas del teclado
+; asignacion de pines del puerto B para el escaneo de columnas del teclado matricial
 #DEFINE C1 d'4'     
 #DEFINE C2 d'5'
 #DEFINE C3 d'6'
 #DEFINE C4 d'7'
 
-; definicion de los estados de la maquina de estados principal
-#DEFINE NORMAL d'0'             ; estado base del programa (muestra valores y controla actuadores)
-#DEFINE UMBRAL1 d'1'            ; estado para programar el primer digito (decenas) del umbral
-#DEFINE UMBRAL2 d'2'            ; estado para programar el segundo digito (unidades) del umbral
+; definicion de estados para la maquina de estados principal (interfaz de usuario)
+#DEFINE NORMAL d'0'             ; estado operativo base: visualizacion de sensores y control de cargas
+#DEFINE UMBRAL1 d'1'            ; estado de configuracion: captura de la decena del umbral
+#DEFINE UMBRAL2 d'2'            ; estado de configuracion: captura de la unidad del umbral
 
-; definicion de letras que el teclado matricial puede devolver
+; decodificacion de los comandos literales del teclado matricial
 #DEFINE letraA b'00010000'
 #DEFINE letraB b'00100000'
 #DEFINE letraC b'00110000'
@@ -38,64 +38,64 @@ list        p=16f887        ; directiva para definir el procesador
 #DEFINE simboloAst b'01010000'
 #DEFINE simboloNum b'01100000'
 
-; definicion de sensores para la interfaz visual
-#DEFINE SENSOR_TEMPERATURA d'0' ; constante para indicar que se muestra la temperatura
-#DEFINE SENSOR_LUZ d'1'         ; constante para indicar que se muestra la luz
+; selectores de visualizacion para los displays de 7 segmentos
+#DEFINE SENSOR_TEMPERATURA d'0' 
+#DEFINE SENSOR_LUZ d'1'         
 
 
 ; ***** VARIABLES BANCO 0 *****
-cblock 0x20                     ; inicio de bloque de variables en banco 0
-    display_sel                 ; selector del display actual en el multiplexado (2, 1 o 0)
-    display0_value              ; valor en formato 7 segmentos para el display izquierdo
-    display1_value              ; valor en formato 7 segmentos para el display central
-    display2_value              ; valor en formato 7 segmentos para el display derecho
+cblock 0x20                     
+    display_sel                 ; selector del canal activo en la rutina de multiplexado (2, 1 o 0)
+    display0_value              ; registro de mapa de bits (7 segmentos) para el display izquierdo
+    display1_value              ; registro de mapa de bits para el display central
+    display2_value              ; registro de mapa de bits para el display derecho
     
-    banderas                    ; registro que agrupa los bits de banderas de estado
-    cont_debounce               ; contador decremental para el antirrebote del teclado
-    cont_adc                    ; contador decremental para medir los 500ms del adc
+    banderas                    ; registro aglutinador de banderas logicas booleanas
+    cont_debounce               ; contador decremental del filtro antirrebote
+    cont_adc                    ; contador decremental para base de tiempo de muestreo (500ms)
     
-    estado_actual               ; almacena el estado actual de la maquina (NORMAL, UMBRAL1, UMBRAL2)
-    estado_temporal             ; almacena la tecla (A, B o C) para saber que umbral se esta modificando
-    sensor_mostrado             ; almacena que sensor se esta visualizando en los displays
-    keypad_value                ; buffer que guarda la ultima tecla presionada validada
-    config_umbral_temp          ; variable para construir el umbral ingresado (nibble alto=decenas, bajo=unidades)
+    estado_actual               ; puntero del estado activo en la maquina principal
+    estado_temporal             ; guarda el comando inicial (A, B, C) para enrutar el guardado del umbral
+    sensor_mostrado             ; define el parametro fisico visualizado en tiempo real
+    keypad_value                ; buffer de transferencia para la tecla presionada
+    config_umbral_temp          ; registro de construccion numerica (nibble alto=decenas, bajo=unidades)
     
-    ; variables de umbrales en formato BCD (ingreso del usuario)
-    umbral_alto_temperatura     ; limite superior de temperatura
-    umbral_bajo_temperatura     ; limite inferior de temperatura
-    umbral_luz                  ; limite minimo de iluminacion
+    ; variables operativas de parametros del usuario
+    umbral_alto_temperatura     ; limite de activacion de refrigeracion (formato BCD)
+    umbral_bajo_temperatura     ; limite de activacion de calefaccion (formato BCD)
+    umbral_luz                  ; limite inferior de iluminacion ambiental (formato BCD)
     
-    ; variables de umbrales convertidos a formato binario puro (8 bits) para comparaciones matematicas
-    umbral_alto_temp_8bit       ; limite superior en 8 bits
-    umbral_bajo_temp_8bit       ; limite inferior en 8 bits
-    umbral_luz_8bit             ; limite de luz en 8 bits
+    ; variables de calculo interno estandarizadas a magnitud numerica de 8 bits
+    umbral_alto_temp_8bit       ; limite termico superior lineal
+    umbral_bajo_temp_8bit       ; limite termico inferior lineal
+    umbral_luz_8bit             ; limite luminico convertido al dominio de resolucion del ADC (0-255)
     
-    ; variables de gestion del modulo ADC
-    adc_canal_actual            ; bit 0 define el canal: 0 = leyendo AN0 (Temp), 1 = leyendo AN1 (Luz)
-    adc_temperatura             ; lectura cruda del ADC para el sensor LM35
-    adc_luz                     ; lectura cruda del ADC para la LDR
+    ; gestores del conversor analogo-digital
+    adc_canal_actual            ; flag de conmutacion: 0 = canal AN0 (Temp), 1 = canal AN1 (Luz)
+    adc_temperatura             ; byte resultante de la conversion de tension termica
+    adc_luz                     ; byte resultante de la conversion del divisor resistivo optico
     
-    ; variables temporales para rutinas de conversion matematica (BCD a 8 bits y Binario a BCD)
-    unidades_tmp                ; guarda temporalmente las unidades extraidas
-    decenas_tmp                 ; guarda temporalmente las decenas extraidas
-    porcentaje_tmp              ; guarda el calculo de multiplicacion por 10
-    umbral_8bit_tmp             ; guarda el valor devuelto por la tabla de conversion
-    bcd_decenas                 ; resultado de decenas calculado desde binario para mostrar
-    bcd_unidades                ; resultado de unidades calculado desde binario para mostrar
-    math_temp                   ; registro de trabajo para bucles de resta sucesiva
+    ; registros temporales para algoritmos matematicos y de conversion
+    unidades_tmp                
+    decenas_tmp                 
+    porcentaje_tmp              
+    umbral_8bit_tmp             
+    bcd_decenas                 ; decena procesada para inyeccion al display
+    bcd_unidades                ; unidad procesada para inyeccion al display
+    math_temp                   ; registro pivot para operaciones aritmeticas
     
-    ; variables especificas para el calculo del porcentaje de luz (ADC * 100 / 256)
-    acc_hi                      ; byte alto del acumulador de 16 bits (contiene la division por 256)
-    acc_lo                      ; byte bajo del acumulador de 16 bits
-    loop_cnt                    ; iterador para el bucle de multiplicacion por sumas sucesivas
-    luz_porcentaje              ; guarda el porcentaje final 0-99 listo para mostrar y transmitir
+    ; registros especificos para escalado de luminosidad porcentual
+    acc_hi                      ; byte mas significativo del acumulador
+    acc_lo                      ; byte menos significativo del acumulador
+    loop_cnt                    ; iterador de algoritmo de multiplicacion
+    luz_porcentaje              ; magnitud luminica escalada a rango 0-99
 endc
 
-; ***** VARIABLES DE INTERRUPCION *****
-cblock 0x70                     ; variables mapeadas en todos los bancos para guardado de contexto
-    w_temp                      ; guarda el registro W al entrar a una interrupcion
-    status_temp                 ; guarda el registro STATUS al entrar a una interrupcion
-    pclath_temp                 ; guarda el registro PCLATH al entrar a una interrupcion
+; ***** VARIABLES DE CONTEXTO (INTERRUPCIONES) *****
+cblock 0x70                     ; memoria no bancada para accesibilidad global
+    w_temp                      ; resguardo del registro de trabajo
+    status_temp                 ; resguardo de banderas de la ALU
+    pclath_temp                 ; resguardo del puntero de pagina de codigo
 endc
 
 ; ************************************************************************
@@ -103,62 +103,59 @@ endc
     ORG     0x000             
 
     nop
-    goto    main                ; salta al inicio del programa principal
+    goto    main                
 
 
 ; ************************************************************************
 ; VECTOR DE INTERRUPCIONES
     ORG     0x004             
 
-    ; guardado de contexto
-    movwf   w_temp              ; guarda W actual
+    ; resguardo del estado maquina (Context Saving)
+    movwf   w_temp              
     movf    STATUS,w            
-    movwf   status_temp         ; guarda STATUS actual
+    movwf   status_temp         
     movf    PCLATH,w      
-    movwf   pclath_temp         ; guarda PCLATH actual
+    movwf   pclath_temp         
 
-    ; despacho de interrupciones
-    btfsc   INTCON, TMR0IF      ; verifica bandera de desbordamiento de Timer0
-    goto    isr_timer0          ; si es 1, salta a la rutina de Timer0
+    ; enrutamiento de fuentes de interrupcion
+    btfsc   INTCON, TMR0IF      ; polling sobre bandera de desbordamiento de Timer0
+    goto    isr_timer0          
 
-    btfsc   INTCON, RBIF        ; verifica bandera de cambio de estado en puerto B
-    goto    isr_keypad          ; si es 1, salta a la rutina del teclado
+    btfsc   INTCON, RBIF        ; polling sobre bandera de cambio de flanco en Puerto B
+    goto    isr_keypad          
 
 fin_isr
-    ; restauracion de contexto
+    ; restauracion de la maquina
     movf    pclath_temp,w     
-    movwf   PCLATH              ; restaura PCLATH
+    movwf   PCLATH              
     movf    status_temp,w     
-    movwf   STATUS              ; restaura STATUS
+    movwf   STATUS              
     swapf   w_temp,f
-    swapf   w_temp,w            ; restaura W (se usa swap para no afectar STATUS)
-    retfie                      ; retorna de la interrupcion habilitando GIE
+    swapf   w_temp,w            
+    retfie                      ; retorno seguro con rehabilitacion de interrupciones
 
 ; ************************************************************************
-; TABLA DE CONVERSION: BCD a 7 SEGMENTOS
+; MEMORIA DE DATOS CONSTANTES (ROM)
 ORG 0x020
 
 tabla
-    ; retorna el mapa de bits para displays de catodo comun (1 enciende, 0 apaga)
-    ; formato: dp g f e d c b a
-    addwf   PCL, f              ; suma el valor de W al contador de programa para saltar
-    retlw   b'00111111'         ; digito 0
-    retlw   b'00000110'         ; digito 1
-    retlw   b'01011011'         ; digito 2
-    retlw   b'01001111'         ; digito 3
-    retlw   b'01100110'         ; digito 4
-    retlw   b'01101101'         ; digito 5
-    retlw   b'01111101'         ; digito 6
-    retlw   b'00000111'         ; digito 7
-    retlw   b'01111111'         ; digito 8
-    retlw   b'01101111'         ; digito 9
+    ; decodificador BCD a 7 Segmentos (Configuracion Catodo Comun, Logica Positiva)
+    addwf   PCL, f              
+    retlw   b'00111111'         ; 0
+    retlw   b'00000110'         ; 1
+    retlw   b'01011011'         ; 2
+    retlw   b'01001111'         ; 3
+    retlw   b'01100110'         ; 4
+    retlw   b'01101101'         ; 5
+    retlw   b'01111101'         ; 6
+    retlw   b'00000111'         ; 7
+    retlw   b'01111111'         ; 8
+    retlw   b'01101111'         ; 9
 
-; ************************************************************************
-; TABLA DE CONVERSION: PORCENTAJE A ADC DE 8 BITS
 ORG 0x100
 tabla_bcd_adc
-    ; convierte un valor 0-99 ingresado por el usuario en su equivalente ADC (0-255)
-    ; se aloja en 0x100 para garantizar que addwf PCL no desborde la pagina
+    ; transferencia no lineal: Porcentaje (0-99) a resolucion de hardware (0-255)
+    ; ubicada en segmento de pagina independiente para aislar desbordamientos del PCL
     addwf   PCL, f
     dt   0,   3,   5,   8,  10,  13,  15,  18,  21,  23
     dt  26,  28,  31,  33,  36,  39,  41,  44,  46,  49
@@ -173,226 +170,223 @@ tabla_bcd_adc
 
 
 ; ************************************************************************
-; INICIO DEL PROGRAMA PRINCIPAL
+; INICIO DE EJECUCION (SETUP)
 ORG 0x200
 
 main
-    ; --- configuracion del oscilador interno ---
+    ; --- parametros del oscilador central ---
     banksel OSCCON
-    movlw   b'01100000'         ; configura oscilador interno a 4MHz
+    movlw   b'01100000'         ; setea oscilador interno primario a 4.0 MHz
     movwf   OSCCON
 
-    ; --- inicializacion de variables de sistema ---
+    ; --- carga de valores iniciales de sistema ---
     banksel 0
     movlw   d'2'
-    movwf   display_sel         ; arranca apuntando al display derecho
-    movlw   b'00111111'         ; carga el codigo del cero en los tres displays
+    movwf   display_sel         
+    movlw   b'00111111'         
     movwf   display0_value
     movwf   display1_value
     movwf   display2_value
     
     movlw   DEBOUNCE_VALUE
-    movwf   cont_debounce       ; inicializa temporizador de antirrebote
+    movwf   cont_debounce       
     movlw   TICKS_MEDIO_SEG
-    movwf   cont_adc            ; inicializa temporizador de lectura analoga
+    movwf   cont_adc            
     
-    clrf    banderas            ; limpia todos los bits de estado
-    bsf     banderas, HABILITAR_TECLADO ; libera el teclado para primera lectura
+    clrf    banderas            
+    bsf     banderas, HABILITAR_TECLADO 
     
     clrf    estado_actual
-    bsf     estado_actual, NORMAL ; fuerza inicio en modo visualizacion normal
+    bsf     estado_actual, NORMAL 
     clrf    estado_temporal
     clrf    sensor_mostrado
-    bsf     sensor_mostrado, SENSOR_TEMPERATURA ; por defecto visualiza temperatura
+    bsf     sensor_mostrado, SENSOR_TEMPERATURA 
     clrf    config_umbral_temp
-    clrf    adc_canal_actual    ; inicializa para leer el canal AN0
+    clrf    adc_canal_actual    
     clrf    adc_temperatura
     clrf    adc_luz
 
-    ; --- configuracion de puertos para displays (Hardware) ---
+    ; --- definicion topologica de puertos visuales ---
     banksel TRISD
-    clrf    TRISD               ; Puerto D como salidas completas (segmentos)
+    clrf    TRISD               ; bus de segmentos 
     banksel PORTD
-    clrf    PORTD               ; limpia salidas
+    clrf    PORTD               
     banksel ANSEL
-    bcf     ANSEL,7             ; asegura que pines del puerto E sean digitales
+    bcf     ANSEL,7             ; configuracion E/S digital para control de display
     bcf     ANSEL,6
     bcf     ANSEL,5
     banksel TRISE
-    clrf    TRISE               ; Puerto E como salidas (transistores multiplexado)
+    clrf    TRISE               ; bus de multiplexores 
     banksel PORTE
-    clrf    PORTE               ; apaga displays
+    clrf    PORTE               
 
-    ; --- configuracion de puerto C (Actuadores y Comunicacion UART) ---
+    ; --- definicion topologica de cargas y telecomunicaciones ---
     banksel TRISC
-    movlw   b'10000000'         ; RC7 (RX) entrada, RC6 (TX) y RC0-RC2 (cargas) salidas
+    movlw   b'10000000'         ; bit 7 RX, bit 6 TX, bits 0-2 etapas BJT de potencia
     movwf   TRISC
     banksel PORTC
-    clrf    PORTC               ; apagar todos los actuadores inicialmente por seguridad
+    clrf    PORTC               ; forzamiento a cero logico preventivo sobre transistores
 
-    ; --- configuracion modulo USART (HC-05 a 9600 baudios) ---
+    ; --- parametrizacion modulo EUSART (Emision Bluetooth) ---
     banksel TXSTA
-    movlw   b'00100100'         ; modo asincrono, TX habilitado, alta velocidad (BRGH=1)
+    movlw   b'00100100'         ; modo asincrono, habilitacion de TX, generador BRG de alta velocidad
     movwf   TXSTA
     banksel RCSTA
-    movlw   b'10000000'         ; habilita el puerto serial (SPEN=1)
+    movlw   b'10000000'         ; habilitacion general del modulo de puerto serie
     movwf   RCSTA
     banksel SPBRG
-    movlw   d'25'               ; formula: (4MHz / (16 * 9600)) - 1 = 25
+    movlw   d'25'               ; divisor de baud rate para 9600 bps nominales a 4 MHz
     movwf   SPBRG
 
-    ; --- configuracion conversor analogo-digital (ADC) ---
+    ; --- parametrizacion bloque analogico ---
     banksel ADCON1
-    movlw   0x00                ; justificacion a la izquierda (solo ADRESH), Vref = VDD y VSS
+    movlw   0x00                ; lectura justificada a la izquierda, tensiones de referencia nativas (Vdd/Vss)
     movwf   ADCON1
     banksel TRISA
-    bsf     TRISA, 0            ; configura RA0 como entrada (LM35)
-    bsf     TRISA, 1            ; configura RA1 como entrada (LDR)
+    bsf     TRISA, 0            ; asignacion pin LM35
+    bsf     TRISA, 1            ; asignacion pin LDR
     banksel ANSEL
-    movlw   b'00000011'         ; activa funciones analogas para AN0 y AN1
+    movlw   b'00000011'         ; activacion fisica de conversion A/D en AN0 y AN1
     movwf   ANSEL
     banksel ANSELH
-    clrf    ANSELH              ; el resto de pines analogos se fuerzan a digital
+    clrf    ANSELH              ; supresion de lectura analogica en resto del banco
     banksel ADCON0
-    movlw   b'01000001'         ; Fosc/8, selecciona canal AN0, modulo ADC encendido (ADON=1)
+    movlw   b'01000001'         ; prescaler Fosc/8, preseleccion canal AN0, encendido de nucleo ADC
     movwf   ADCON0
 
-    ; --- configuracion timer0 (base de tiempo del multiplexado) ---
+    ; --- parametrizacion nucleo Timer0 ---
     banksel OPTION_REG
-    movlw   b'01000100'         ; asigna prescaler 1:32 al TMR0, reloj interno
+    movlw   b'01000100'         ; asignacion de prescaler 1:32 acoplado al reloj del sistema
     movwf   OPTION_REG
     banksel TMR0
-    movlw   TMR0_VALUE          ; carga offset para contar exactos 3.33ms
+    movlw   TMR0_VALUE          ; base de interrupcion precalculada
     movwf   TMR0
 
-    ; --- configuracion teclado matricial (Interrupcion IOC) ---
+    ; --- parametrizacion interrupciones de teclado (IOC) ---
     banksel TRISB
-    movlw   b'11110000'         ; RB4-RB7 como entradas (filas), RB0-RB3 como salidas (columnas)
+    movlw   b'11110000'         ; filas matriciales de entrada, columnas de salida
     movwf   TRISB
     banksel PORTB
-    clrf    PORTB               ; las salidas a cero activan la busqueda de columnas
+    clrf    PORTB               ; fijacion a 0V para sensado de derivacion en filas
     banksel IOCB
-    movlw   b'11110000'         ; habilita la interrupcion por cambio en pines RB4-RB7
+    movlw   b'11110000'         ; enmascaramiento de flancos para detectar pulsaciones
     movwf   IOCB
     banksel WPUB
-    movlw   b'11110000'         ; activa resistencias pull-up internas en entradas
+    movlw   b'11110000'         ; activacion pull-up internas previniendo estados flotantes
     movwf   WPUB
 
-    ; --- habilitacion general de interrupciones ---
+    ; --- integracion global de interrupciones ---
     banksel INTCON
-    clrf    INTCON              ; limpia posibles banderas atoradas
-    bsf     INTCON, TMR0IE      ; habilita interrupcion de Timer0
-    bsf     INTCON, RBIE        ; habilita interrupcion del Puerto B
-    bsf     INTCON, GIE         ; habilita el manejador global de interrupciones
+    clrf    INTCON              
+    bsf     INTCON, TMR0IE      
+    bsf     INTCON, RBIE        
+    bsf     INTCON, GIE         
 
-    goto main_loop              ; salta al bucle infinito
+    goto main_loop              
 
 
 ; ************************************************************************
-; BUCLE PRINCIPAL (MAQUINA DE ESTADOS)
+; BUCLE PRINCIPAL Y GESTION DE TAREAS
 main_loop
-    ; --- subrutina de muestreo ADC no bloqueante ---
-    btfss   banderas, LEER_ADC  ; verifica si timer0 conto 500ms
-    goto    revisar_teclado     ; si no, saltea la lectura
+    ; --- gestion asincrona de medicion fisica ---
+    btfss   banderas, LEER_ADC  ; evaluacion de temporizador macro
+    goto    revisar_teclado     
     
-    bcf     banderas, LEER_ADC  ; baja la bandera
-    bsf     ADCON0, GO          ; dispara la conversion del canal actual
+    bcf     banderas, LEER_ADC  
+    bsf     ADCON0, GO          ; trigger por software del integrador analogo
 esperar_adc
-    btfsc   ADCON0, GO          ; el bit GO baja cuando la conversion termina
-    goto    esperar_adc         ; espera activa de escasos microsegundos
+    btfsc   ADCON0, GO          ; polling de bandera de finalizacion (Hardware)
+    goto    esperar_adc         
     
-    movf    ADRESH, w           ; guarda el resultado de 8 bits en W
-    btfsc   adc_canal_actual, 0 ; evalua que canal acaba de leerse
+    movf    ADRESH, w           ; captura del registro alineado
+    btfsc   adc_canal_actual, 0 ; enrutamiento cruzado de lecturas
     goto    guardar_an1
 
 guardar_an0
-    movwf   adc_temperatura     ; guarda el valor correspondiente al LM35
-    bsf     adc_canal_actual, 0 ; invierte la bandera para indicar proxima lectura en canal 1
-    movlw   b'01000101'         ; reconfigura ADCON0: mantiene on, selecciona AN1
+    movwf   adc_temperatura     
+    bsf     adc_canal_actual, 0 ; preparacion para escaneo secuencial
+    movlw   b'01000101'         ; conmutacion logica a MUX canal 1
     movwf   ADCON0
-    goto    revisar_teclado     ; no hace logica hasta leer ambos canales
+    goto    revisar_teclado     
 
 guardar_an1
-    movwf   adc_luz             ; guarda el valor correspondiente a la LDR
-    bcf     adc_canal_actual, 0 ; retorna bandera a canal 0
-    movlw   b'01000001'         ; reconfigura ADCON0: mantiene on, selecciona AN0
+    movwf   adc_luz             
+    bcf     adc_canal_actual, 0 
+    movlw   b'01000001'         ; conmutacion logica a MUX canal 0
     movwf   ADCON0
     
-    ; --- analisis logico de la muestra completada ---
-    btfss   estado_actual, NORMAL   ; impide controlar y enviar datos si el usuario esta configurando
-    goto    revisar_teclado         
+    ; --- ejecucion de control en lazo cerrado ---
+    btfss   estado_actual, NORMAL   ; validacion de estado de maquina
+    goto    revisar_teclado         ; inhibicion de reaccion durante ingreso manual
     
-    call    control_actuadores      ; actualiza salidas de potencia segun umbrales
-    call    enviar_datos_bluetooth  ; emite el paquete "TxxLxx\n" por puerto serial
+    call    control_actuadores      ; rutina principal de evaluacion de umbrales termicos y luminicos
+    call    enviar_datos_bluetooth  ; emision periodica por UART de telemetria
 
 revisar_teclado
-    ; --- gestion del buffer de pulsaciones ---
-    btfss   banderas, BUFFER_KEYPAD ; si hay un dato fresco en keypad_value = 1
-    goto    actualizar_pantalla     ; si no hay tecla, procede a refrescar datos visuales
-    bcf     banderas, BUFFER_KEYPAD ; acusa recibo bajando la bandera
+    ; --- consumo de eventos de hardware de interfaz ---
+    btfss   banderas, BUFFER_KEYPAD 
+    goto    actualizar_pantalla     
+    bcf     banderas, BUFFER_KEYPAD 
 
-    ; --- despachador de la maquina de estados principal ---
     btfsc   estado_actual, NORMAL
-    goto    loop_estado_normal      ; si esta en NORMAL analiza ingresos (A, B, C, *)
+    goto    loop_estado_normal      
     btfsc   estado_actual, UMBRAL1
-    goto    loop_estado_umbral1     ; si esta en ingreso de decenas
-    goto    loop_estado_umbral2     ; si esta en ingreso de unidades
+    goto    loop_estado_umbral1     
+    goto    loop_estado_umbral2     
 
 actualizar_pantalla
-    ; evita sobrescribir las letras de configuracion ("U - -") si el usuario navega el menu
+    ; --- renderizado asincrono de informacion telemetrica ---
     btfss   estado_actual, NORMAL
     goto    main_loop
 
-    ; decide si envia temperatura o luz a la subrutina de multiplexado
     btfsc   sensor_mostrado, SENSOR_TEMPERATURA
     goto    mostrar_temp
     goto    mostrar_luz
 
 mostrar_temp
-    ; formula LM35: cada bit del ADC son 19.53mV. LM35 da 10mV/C. 
-    ; temp en C = ADC * 1.95. Se aproxima a multiplicacion por 2 mediante rotacion
+    ; transformacion de magnitud electrica a magnitud fisica
+    ; resolucion: 19.5mV/bit. respuesta LM35: 10mV/C. 
+    ; temp = ADC * (19.5/10) = ADC * 1.95. aproximacion entera: x2 (rlf)
     bcf     STATUS, C
     rlf     adc_temperatura, w
     
-    ; --- filtro antidesborde de tabla para temperatura ---
     movwf   math_temp       
-    sublw   d'99'               ; 99 - W
-    btfss   STATUS, C           ; si hay borrow, W era mayor a 99
+    sublw   d'99'               ; validacion de rango para el motor grafico (Display)
+    btfss   STATUS, C           
     goto    limitar_t
-    movf    math_temp, w        ; si estaba en rango, se recupera el valor validado
+    movf    math_temp, w        
     goto    bcd_t
 limitar_t
-    movlw   d'99'               ; clava el maximo visual en 99
+    movlw   d'99'               ; saturacion numerica logica
 bcd_t:
-    call    bin_a_bcd           ; descompone en decenas y unidades
+    call    bin_a_bcd           
 
-    movlw   b'01111000'         ; codigo manual 7 segmentos para letra 't'
+    movlw   b'01111000'         ; inyeccion en memoria de grafica 't'
     movwf   display0_value
     movf    bcd_decenas, w      
-    call    tabla               ; solicita codificacion visual de decenas
+    call    tabla               
     movwf   display1_value
     movf    bcd_unidades, w
-    call    tabla               ; solicita codificacion visual de unidades
+    call    tabla               
     movwf   display2_value
-    goto    main_loop           ; cierra ciclo
+    goto    main_loop           
 
 mostrar_luz
-    call    calcular_porcentaje_luz ; procesa la lectura cruda en escala 0-99
+    call    calcular_porcentaje_luz 
     
-    ; --- filtro antidesborde de tabla para luminosidad ---
     movf    luz_porcentaje, w
     movwf   math_temp
-    sublw   d'99'
+    sublw   d'99'               ; validacion de desbordamiento grafico
     btfss   STATUS, C
     goto    limitar_l
     movf    math_temp, w
     goto    bcd_l
 limitar_l
-    movlw   d'99'               ; maximo visual en 99
+    movlw   d'99'               
 bcd_l:
     call    bin_a_bcd
 
-    movlw   b'00111000'         ; codigo manual 7 segmentos para letra 'L'
+    movlw   b'00111000'         ; inyeccion en memoria de grafica 'L'
     movwf   display0_value
     movf    bcd_decenas, w
     call    tabla
@@ -400,48 +394,48 @@ bcd_l:
     movf    bcd_unidades, w
     call    tabla
     movwf   display2_value
-    goto    main_loop           ; cierra ciclo
+    goto    main_loop           
 
 ; -------------------------------------------------------
-; BLOQUE DE ESTADO: NORMAL (Procesamiento de Comandos)
+; MAQUINA DE ESTADOS: FASE DE REPOSO
 loop_estado_normal
-    ; compara la tecla presionada con las opciones validas del menu
+    ; evaluacion del byte de comando
     movf    keypad_value, w
     xorlw   letraA
     btfsc   STATUS, Z
-    goto    loop_normal_letraA  ; invoca configuracion de umbral superior de temp
+    goto    loop_normal_letraA  ; operacion sobre umbral alto temp
 
     movf    keypad_value, w
     xorlw   letraB
     btfsc   STATUS, Z
-    goto    loop_normal_letraB  ; invoca configuracion de umbral inferior de temp
+    goto    loop_normal_letraB  ; operacion sobre umbral bajo temp
 
     movf    keypad_value, w
     xorlw   letraC
     btfsc   STATUS, Z
-    goto    loop_normal_letraC  ; invoca configuracion de umbral de luz
+    goto    loop_normal_letraC  ; operacion sobre umbral luminoso
 
-    goto    loop_normal_ast     ; por descarte asume asterisco (cambio de visualizacion)
+    goto    loop_normal_ast     ; operacion de conmutacion de pantalla
 
 loop_normal_letraA
     clrf    estado_actual
-    bsf     estado_actual, UMBRAL1  ; transiciona al estado ingreso primer digito
+    bsf     estado_actual, UMBRAL1  
     movf    keypad_value, w
-    movwf   estado_temporal         ; guarda 'A' para saber donde guardar el resultado final
+    movwf   estado_temporal         
     movlw   b'00111110'                 
-    movwf   display0_value          ; muestra 'U'
+    movwf   display0_value          ; despliegue grafico 'U'
     movlw   b'01000000'                 
-    movwf   display1_value          ; muestra '-'
-    movwf   display2_value          ; muestra '-'
-    clrf    keypad_value            ; limpia buffer previniendo doble ingreso
-    clrf    PORTC                   ; desactiva actuadores por seguridad mientras se configura
+    movwf   display1_value          ; despliegue grafico '-'
+    movwf   display2_value          
+    clrf    keypad_value            
+    clrf    PORTC                   ; proteccion contra comportamiento no determinista del hardware
     goto    main_loop
 
 loop_normal_letraB
     clrf    estado_actual
     bsf     estado_actual, UMBRAL1
     movf    keypad_value, w
-    movwf   estado_temporal         ; guarda 'B'
+    movwf   estado_temporal         
     movlw   b'00111110'                 
     movwf   display0_value
     movlw   b'01000000'                 
@@ -455,7 +449,7 @@ loop_normal_letraC
     clrf    estado_actual
     bsf     estado_actual, UMBRAL1
     movf    keypad_value, w
-    movwf   estado_temporal         ; guarda 'C'
+    movwf   estado_temporal         
     movlw   b'00111110'                 
     movwf   display0_value
     movlw   b'01000000'                 
@@ -466,7 +460,7 @@ loop_normal_letraC
     goto    main_loop
 
 loop_normal_ast
-    ; si presiona asterisco, intercala la variable logica de visualizacion
+    ; multiplexado logico del motor grafico
     btfsc   sensor_mostrado, SENSOR_TEMPERATURA
     goto    loop_ast_cambiar_a_luz
     clrf    sensor_mostrado
@@ -481,70 +475,66 @@ loop_ast_cambiar_a_luz
     goto    main_loop
 
 ; -------------------------------------------------------
-; BLOQUE DE ESTADO: UMBRAL1 (Ingreso de Decenas)
+; MAQUINA DE ESTADOS: FASE DE NIBBLE ALTO
 loop_estado_umbral1
     movf    keypad_value, w
     xorlw   letraD
     btfsc   STATUS, Z
-    goto    loop_umbral1_cancelar   ; tecla D cancela la operacion actual
+    goto    loop_umbral1_cancelar   ; instruccion de escape/cancelacion
 
-    ; validacion numerica: descarta letras accidentales
     movf    keypad_value, w
     sublw   d'9'
-    btfss   STATUS, C               ; si C=0, numero ingresado es mayor a 9
+    btfss   STATUS, C               ; aislamiento de valores numericos puros
     goto    main_loop       
 
-    ; empaqueta el primer digito desplazandolo al nibble alto
+    ; empaquetamiento BCD: desplazamiento a nibble mas significativo
     movf    keypad_value, w
-    movwf   config_umbral_temp      ; guarda ej. 0x05
-    swapf   config_umbral_temp, f   ; transforma a 0x50 (5 decenas)
+    movwf   config_umbral_temp      
+    swapf   config_umbral_temp, f   
     
-    ; dibuja el primer numero en el display central
     movf    keypad_value, w
     call    tabla
-    movwf   display1_value
+    movwf   display1_value          ; inyeccion a bloque grafico
     movlw   b'01000000'                 
-    movwf   display2_value          ; mantiene guion a la derecha
+    movwf   display2_value          
     
     clrf    estado_actual
-    bsf     estado_actual, UMBRAL2  ; transiciona a espera de unidades
+    bsf     estado_actual, UMBRAL2  
     clrf    keypad_value
     goto    main_loop
 
 loop_umbral1_cancelar
     clrf    estado_actual
-    bsf     estado_actual, NORMAL   ; aborta y retorna al estado base
-    clrf    config_umbral_temp      ; limpia basura
+    bsf     estado_actual, NORMAL   
+    clrf    config_umbral_temp      ; purga del registro de composicion
     clrf    keypad_value
     goto    main_loop
 
 ; -------------------------------------------------------
-; BLOQUE DE ESTADO: UMBRAL2 (Ingreso de Unidades)
+; MAQUINA DE ESTADOS: FASE DE NIBBLE BAJO
 loop_estado_umbral2
     movf    keypad_value, w
     xorlw   letraD
     btfsc   STATUS, Z
-    goto    loop_umbral2_volver     ; tecla D funciona como borrado retroactivo (Backspace)
+    goto    loop_umbral2_volver     ; instruccion de borrado parcial (backspace)
 
-    ; validacion numerica
     movf    keypad_value, w
     sublw   d'9'
     btfss   STATUS, C
     goto    main_loop       
 
-    ; fusion del digito actual con el nibble guardado
-    movf    keypad_value, w         ; ej. nuevo valor 0x03
-    iorwf   config_umbral_temp, f   ; OR logico: 0x50 OR 0x03 = 0x53 (Valor BCD final)
+    ; finalizacion de trama BCD: union logica de nibbles
+    movf    keypad_value, w         
+    iorwf   config_umbral_temp, f   
     
-    ; muestra el resultado en el display de unidades
     movf    keypad_value, w
     call    tabla
     movwf   display2_value
 
-    ; transforma el formato visual a un byte de maquina para su uso interno
-    call    convertir_bcd_8bit
+    ; descompresion BCD a binario lineal para logica matematica de control
+    call    convertir_bcd_a_decimal
 
-    ; logica de enrutamiento basada en la variable temporal guardada inicialmente
+    ; direccionamiento de datos en memoria segun parametro temporal guardado
     movf    estado_temporal, w
     xorlw   letraA
     btfsc   STATUS, Z
@@ -555,41 +545,47 @@ loop_estado_umbral2
     btfsc   STATUS, Z
     goto    loop_umbral2_guardar_bajo
 
-    goto    loop_umbral2_guardar_luz ; por descarte era configuracion de luz
+    goto    loop_umbral2_guardar_luz 
 
 loop_umbral2_guardar_alto
     movf    config_umbral_temp, w
     movwf   umbral_alto_temperatura
-    movf    umbral_8bit_tmp, w
-    movwf   umbral_alto_temp_8bit   ; persiste el valor ADC traducido para el comparador
+    movf    porcentaje_tmp, w       ; transferencia de magnitud decimal (Ej: 35)
+    movwf   umbral_alto_temp_8bit   
     goto    loop_umbral2_fin
 
 loop_umbral2_guardar_bajo
     movf    config_umbral_temp, w
     movwf   umbral_bajo_temperatura
-    movf    umbral_8bit_tmp, w
+    movf    porcentaje_tmp, w       ; transferencia de magnitud decimal (Ej: 15)
     movwf   umbral_bajo_temp_8bit
     goto    loop_umbral2_fin
 
 loop_umbral2_guardar_luz
     movf    config_umbral_temp, w
     movwf   umbral_luz
-    movf    umbral_8bit_tmp, w
-    movwf   umbral_luz_8bit
+    
+    ; aplica transformacion no lineal de magnitud ingresada por el usuario (0-99%) a resolucion fisica de conversion (0-255)
+    movlw   HIGH(tabla_bcd_adc)     
+    movwf   PCLATH
+    movf    porcentaje_tmp, w
+    call    tabla_bcd_adc
+    clrf    PCLATH
+    movwf   umbral_luz_8bit         
     goto    loop_umbral2_fin
 
 loop_umbral2_fin
-    clrf    config_umbral_temp      ; limpieza total de buffers temporales
+    clrf    config_umbral_temp      
     clrf    estado_actual
-    bsf     estado_actual, NORMAL   ; cierre exitoso, retorno a visualizacion
+    bsf     estado_actual, NORMAL   ; cierre del modo programacion
     clrf    keypad_value
     goto    main_loop
 
 loop_umbral2_volver
     clrf    config_umbral_temp
     clrf    estado_actual
-    bsf     estado_actual, UMBRAL1  ; retrocede de estado
-    movlw   b'01000000'             ; vuelve a colocar los guiones de espera
+    bsf     estado_actual, UMBRAL1  
+    movlw   b'01000000'             
     movwf   display1_value
     movwf   display2_value
     clrf    keypad_value
@@ -597,61 +593,65 @@ loop_umbral2_volver
 
 
 ; ************************************************************************
-; SUBRUTINAS DE LOGICA DE SISTEMA
+; SUBRUTINAS DE LÓGICA MECATRONICA Y COMUNICACIONES
 ; ************************************************************************
 
-; Subrutina: Control de Actuadores
-; Compara lecturas y aplica logica positiva sobre los BJT del puerto C
+; Subrutina: Ejecucion de Control de Potencia
+; Administra las senales para las etapas transistorizadas NPN del microcontrolador
 control_actuadores
-    ; evaluacion limite superior: verifica si hay exceso de calor
+    ; calcula temperatura real linealizada (ADC * 2) para posibilitar algebra directa
+    bcf     STATUS, C
+    rlf     adc_temperatura, w
+    movwf   math_temp               
+    
+    ; analisis de sobretemperatura (Refrigeracion)
     movf    umbral_alto_temp_8bit, w
-    subwf   adc_temperatura, w
-    btfsc   STATUS, C               ; si C=1, ADC supero el Umbral Alto
+    subwf   math_temp, w            ; magnitud fisica menos umbral
+    btfsc   STATUS, C               ; bit C evalua desbordamiento de sustraccion
     goto    encender_ventilador
     
-    ; evaluacion limite inferior: verifica si falta calor
+    ; analisis de hipotermia (Calefaccion)
     movf    umbral_bajo_temp_8bit, w
-    subwf   adc_temperatura, w
-    btfss   STATUS, C               ; si C=0, ADC descendio bajo el Umbral Bajo
+    subwf   math_temp, w            
+    btfss   STATUS, C               
     goto    encender_calefactor
     
-    ; si no se cumplen las condiciones extremas (rango seguro):
-    bcf     PORTC, 0                ; apaga transistor del ventilador
-    bcf     PORTC, 1                ; apaga transistor de resistencia termica
+    ; estado de histéresis inactiva (Rango confort)
+    bcf     PORTC, 0                ; bloquea base BJT Ventilador
+    bcf     PORTC, 1                ; bloquea base BJT Resistencia Termica
     goto    control_iluminacion
     
 encender_ventilador
     bsf     PORTC, 0                ; satura transistor RC0
-    bcf     PORTC, 1                ; asegura apagado del calefactor por seguridad (exclusividad logica)
+    bcf     PORTC, 1                ; proteccion de hardware: forzar apagado de contraparte termica
     goto    control_iluminacion
 
 encender_calefactor
-    bcf     PORTC, 0                ; asegura apagado del ventilador
+    bcf     PORTC, 0                
     bsf     PORTC, 1                ; satura transistor RC1
 
 control_iluminacion
-    ; evalua escasez de luz
+    ; evaluacion de nivel de incidencia de luz ambiente contra patron escalado
     movf    umbral_luz_8bit, w
     subwf   adc_luz, w
-    btfss   STATUS, C               ; si C=0, luminosidad externa es insuficiente
+    btfss   STATUS, C               ; si iluminacion relativa es menor a calibracion
     goto    encender_leds
     
-    bcf     PORTC, 2                ; luminosidad suficiente, apaga tira LED
+    bcf     PORTC, 2                ; iluminacion optima, apaga circuito lumínico
     return
     
 encender_leds
-    bsf     PORTC, 2                ; satura transistor RC2 activando modulo LED
+    bsf     PORTC, 2                ; satura transistor RC2 activando carga luminosa
     return
 
 
-; Subrutina: Transmision de Datos Bluetooth
-; Empaqueta lecturas en formato de cadena TXXLXX\n para el software MIT App Inventor
+; Subrutina: Pila de Transmision EUSART Bluetooth
+; Formula trama compatible con algoritmos de lectura por delimitador en sistemas externos
 enviar_datos_bluetooth
-    ; envio de prefijo de temperatura
     movlw   'T'
     call    tx_byte
     
-    ; recodifica la temperatura cruda a BCD para su impresion en consola
+    ; reconstruccion visual de magnitud para trama ASCII
     bcf     STATUS, C
     rlf     adc_temperatura, w
     movwf   math_temp
@@ -665,19 +665,17 @@ bt_limitar_t
 bt_bcd_t:
     call    bin_a_bcd
     
-    ; convierte decenas y unidades calculadas a caracteres ASCII
+    ; traslacion del binario BCD a codigo estandarizado ASCII
     movf    bcd_decenas, w
-    addlw   '0'                     ; el offset ASCII del caracter '0' es 0x30
+    addlw   '0'                     
     call    tx_byte
     movf    bcd_unidades, w
     addlw   '0'                     
     call    tx_byte
 
-    ; envio de prefijo de luz
     movlw   'L'
     call    tx_byte
     
-    ; recalcula la luz y la codifica a caracteres
     call    calcular_porcentaje_luz
     movf    luz_porcentaje, w
     movwf   math_temp
@@ -691,7 +689,6 @@ bt_limitar_l
 bt_bcd_l:
     call    bin_a_bcd
     
-    ; envia porcion numerica de luz
     movf    bcd_decenas, w
     addlw   '0'             
     call    tx_byte
@@ -699,440 +696,40 @@ bt_bcd_l:
     addlw   '0'             
     call    tx_byte
     
-    ; envio de secuencia de fin de linea (Delimitador LF)
+    ; byte de control de salto de linea (LF = 0x0A) como indicador de final de registro
     movlw   0x0A
     call    tx_byte
     return
 
 tx_byte
-    ; control de hardware UART para transmision byte a byte
-    btfss   PIR1, 4                 ; el bit TXIF (4) avisa si el buffer de hardware se vacio
-    goto    tx_byte                 ; espera bloqueante corta
-    movwf   TXREG                   ; carga byte a transmitir en la cola serial
+    ; gestion de buffers de transmision de hardware
+    btfss   PIR1, 4                 ; control de bandera de vaciado TXIF
+    goto    tx_byte                 
+    movwf   TXREG                   ; carga dato en shift register de transmision
     return
 
 
 ; ************************************************************************
-; SUBRUTINAS MATEMATICAS Y DE CONVERSION
+; LIBRERIA DE ALGORITMOS ARITMETICOS
 ; ************************************************************************
 
-; Subrutina: Calcular porcentaje de luz (Valor_ADC * 100 / 256)
+; Subrutina: Formula porcentaje (Resolucion ADC * 100 / 256)
 calcular_porcentaje_luz
     clrf    acc_hi
     clrf    acc_lo
     movf    adc_luz, w
-    btfsc   STATUS, Z               ; si ADC dio 0 absoluto, evita calculos
+    btfsc   STATUS, Z               ; evaluacion de division por cero logico
     goto    fin_adc_porcentaje      
-    movwf   loop_cnt                ; usa el valor leido como cantidad de iteraciones (Multiplicacion)
+    movwf   loop_cnt                
 suma_100
+    ; acumulacion en vector de 16 bits
     movlw   d'100'
-    addwf   acc_lo, f               ; acumula 100 en byte bajo
+    addwf   acc_lo, f               
     btfsc   STATUS, C               
-    incf    acc_hi, f               ; transfiere acarreo al byte alto
+    incf    acc_hi, f               
     decfsz  loop_cnt, f             
     goto    suma_100
 fin_adc_porcentaje
-    movf    acc_hi, w               ; el byte alto contiene intrinsecamente la division por 256
-    movwf   luz_porcentaje
-    return
-
-; Subrutina: Binario puro a formato BCD (Limites 0-99)
-bin_a_bcd
-    movwf   math_temp               ; adquiere parametro de entrada             
-    clrf    bcd_decenas
-restar_10
-    movlw   d'10'
-    subwf   math_temp, w            ; resta diez de manera ciclica
-    btfss   STATUS, C               ; corta cuando el resultado provoca acarreo negativo
-    goto    fin_bcd
-    movwf   math_temp               ; aplica la resta al valor oficial            
-    incf    bcd_decenas, f          ; contabiliza una decena exitosa        
-    goto    restar_10
-fin_bcd
-    movf    math_temp, w            ; el saldo de la division son las unidades residuales
-    movwf   bcd_unidades
-    return
-
-; Subrutina: Formato empaquetado BCD a binario de 8 bits
-convertir_bcd_8bit
-    ; aisla decenas y las ubica en bits LSB
-    movf    config_umbral_temp, w
-    andlw   0xF0
-    movwf   decenas_tmp
-    swapf   decenas_tmp, f
-    ; aisla unidades intactas
-    movf    config_umbral_temp, w
-    andlw   0x0F
-    movwf   unidades_tmp
-    clrf    porcentaje_tmp
-    
-    ; reordena a valor lineal (Decenas * 10)
-    movf    decenas_tmp, w
-    btfsc   STATUS, Z
-    goto    sumar_unidades_bcd
-bucle_por_diez
-    movlw   d'10'
-    addwf   porcentaje_tmp, f
-    decfsz  decenas_tmp, f
-    goto    bucle_por_diez
-sumar_unidades_bcd
-    ; (Decenas * 10) + Unidades = Porcentaje Entero
-    movf    unidades_tmp, w
-    addwf   porcentaje_tmp, f
-    
-    ; carga valor en puntero PCLATH y mapea con tabla inversa
-    movlw   HIGH(tabla_bcd_adc)     ; garantiza correcta paginacion de tabla extensa
-    movwf   PCLATH
-    movf    porcentaje_tmp, w
-    call    tabla_bcd_adc
-    clrf    PCLATH                  ; vital: restablece pagina base
-    movwf   umbral_8bit_tmp         ; devuelve el calculo listo para el comparador
-    return
-
-; ************************************************************************
-; GESTION DE INTERRUPCIONES
-; ************************************************************************
-
-; Rutina de Timer0 (Ejecucion periodica cada 3.33 milisegundos)
-isr_timer0
-    banksel TMR0
-    movlw   TMR0_VALUE              ; recarga modulo de timer interno
-    movwf   TMR0
-    banksel 0
-    
-    ; gestion de reloj auxiliar lento (500ms) para lectura de sensores
-    decfsz  cont_adc, f
-    goto    subrutina_debounce  
-    
-    movlw   TICKS_MEDIO_SEG         ; al llegar a cero, reinicia contador macro
-    movwf   cont_adc
-    bsf     banderas, LEER_ADC      ; autoriza main_loop a usar el bus del ADC
-
-subrutina_debounce
-    ; maquina de estados de filtrado de ruido para teclado
-    btfss   banderas, TECLADO_PRESIONADO
-    goto    subrutina_multiplexado  ; si no hay evento, avanza directo a dibujo
-
-    decfsz  cont_debounce, f
-    goto    subrutina_multiplexado  ; si esta procesando, consume ticks muertos
-
-    ; validacion de tecla sostenida
-    banksel PORTB
-    movf    PORTB, w
-    banksel 0
-    andlw   b'11110000'
-    xorlw   b'11110000'
-    btfss   STATUS, Z
-    goto    teclado_aun_presionado
-
-teclado_liberado
-    ; libera hardware aceptando nueva digitacion
-    movlw   DEBOUNCE_VALUE
-    movwf   cont_debounce
-    bsf     banderas, HABILITAR_TECLADO
-    bcf     banderas, TECLADO_PRESIONADO
-    goto    subrutina_multiplexado
-
-teclado_aun_presionado
-    ; dedo en la tecla, reengancha cuenta
-    movlw   DEBOUNCE_VALUE
-    movwf   cont_debounce
-    goto    subrutina_multiplexado
-
-subrutina_multiplexado
-    ; algoritmo de persistencia visual de pantallas (POV)
-    banksel PORTE
-    clrf    PORTE                   ; limpia el canal previniendo ecos visuales (ghosting)
-
-    banksel display_sel
-    movf    display_sel, w
-    btfsc   STATUS, Z
-    goto    caso_display0           ; enruta hardware segun la fase del ciclo
-    
-    xorlw   d'1'
-    btfsc   STATUS, Z
-    goto    caso_display1
-    
-    goto    caso_display2
-
-caso_display0
-    movf    display0_value,w
-    movwf   PORTD                   ; manda mapa de bits de variable izquierda a los leds
-    bsf     PORTE, 0                ; enciende transistor habilitador izquierdo
-    goto fin_multiplexado
-caso_display1
-    movf    display1_value,w
-    movwf   PORTD
-    bsf     PORTE, 1                ; habilita medio
-    goto fin_multiplexado
-caso_display2
-    movf    display2_value,w
-    movwf   PORTD
-    bsf     PORTE, 2                ; habilita derecho
-    goto fin_multiplexado
-
-fin_multiplexado
-    ; logica de rotacion de anillo 2->1->0->2...
-    movf    display_sel, w
-    btfsc   STATUS, Z
-    goto    reset_display_sel
-    decf    display_sel, f
-    goto    fin_actualizacion
-
-reset_display_sel
-    movlw   d'2'
-    movwf   display_sel
-
-fin_actualizacion
-    bcf     INTCON, TMR0IF          ; fundamental: baja bandera para prevenir recursion
-    goto    fin_isr
-
-
-; Rutina de Teclado Matricial (Interrupcion IOCB - Interrupcion al cambio)
-isr_keypad
-    ; el micro manda llamar esta rutina si cualquier pin RB4 a RB7 sufre cambio
-    banksel PORTB
-    movf    PORTB, w                ; lectura dummy obligatoria para liberar desajuste de lectura (mismatch)
-
-    btfss   banderas, HABILITAR_TECLADO
-    goto    fin_isr_keypad          ; si hay una operacion activa, descarta rebotes analogos
-    
-    bsf     banderas, TECLADO_PRESIONADO ; traba la puerta activando contador debounce
-    goto    leer_teclado
-
-leer_teclado
-    bcf     banderas, HABILITAR_TECLADO ; apaga permisos de lectura
-    banksel PORTB
-    ; ubica sobre que columna recayo el evento
-    btfss PORTB, C1
-    goto columna1
-    btfss PORTB, C2
-    goto columna2
-    btfss PORTB, C3
-    goto columna3
-    btfss PORTB, C4
-    goto columna4
-    goto fin_isr_keypad
-
-columna1
-    ; aisla fila inyectando cero logico escalonado
-    bsf     PORTB, 0
-    bsf     PORTB, 1
-    bsf     PORTB, 2
-    bsf     PORTB, 3
-    bcf     PORTB, 0
-    btfss   PORTB, C1
-    goto    tecla1
-    bsf     PORTB, 0
-    bcf     PORTB, 1
-    btfss   PORTB, C1
-    goto    tecla4
-    bsf     PORTB, 1
-    bcf     PORTB, 2
-    btfss   PORTB, C1
-    goto    tecla7
-    bsf     PORTB, 2
-    bcf     PORTB, 3
-    btfss   PORTB, C1
-    goto    teclaAst
-    goto    fin_isr_keypad
-
-columna2
-    bsf     PORTB, 0
-    bsf     PORTB, 1
-    bsf     PORTB, 2
-    bsf     PORTB, 3
-    bcf     PORTB, 0
-    btfss   PORTB, C2
-    goto    tecla2
-    bsf     PORTB, 0
-    bcf     PORTB, 1
-    btfss   PORTB, C2
-    goto    tecla5
-    bsf     PORTB, 1
-    bcf     PORTB, 2
-    btfss   PORTB, C2
-    goto    tecla8
-    bsf     PORTB, 2
-    bcf     PORTB, 3
-    btfss   PORTB, C2
-    goto    tecla0
-    goto    fin_isr_keypad
-
-columna3
-    bsf     PORTB, 0
-    bsf     PORTB, 1
-    bsf     PORTB, 2
-    bsf     PORTB, 3
-    bcf     PORTB, 0
-    btfss   PORTB, C3
-    goto    tecla3
-    bsf     PORTB, 0
-    bcf     PORTB, 1
-    btfss   PORTB, C3
-    goto    tecla6
-    bsf     PORTB, 1
-    bcf     PORTB, 2
-    btfss   PORTB, C3
-    goto    tecla9
-    bsf     PORTB, 2
-    bcf     PORTB, 3
-    btfss   PORTB, C3
-    goto    teclaNum
-    goto    fin_isr_keypad
-
-columna4
-    bsf     PORTB, 0
-    bsf     PORTB, 1
-    bsf     PORTB, 2
-    bsf     PORTB, 3
-    bcf     PORTB, 0
-    btfss   PORTB, C4
-    goto    teclaA
-    bsf     PORTB, 0
-    bcf     PORTB, 1
-    btfss   PORTB, C4
-    goto    teclaB
-    bsf     PORTB, 1
-    bcf     PORTB, 2
-    btfss   PORTB, C4
-    goto    teclaC
-    bsf     PORTB, 2
-    bcf     PORTB, 3
-    btfss   PORTB, C4
-    goto    teclaD
-    goto    fin_isr_keypad
-
-; rutinas de asignacion de buffer final
-tecla1
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'1'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla2
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'2'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla3
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'3'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla4
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'4'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla5
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'5'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla6
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'6'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla7
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'7'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla8
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'8'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla9
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'9'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-tecla0
-    btfsc   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   d'0'
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-teclaA
-    btfss   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   letraA
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-teclaB
-    btfss   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   letraB
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-teclaC
-    btfss   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   letraC
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-teclaD
-    btfsc   estado_actual, NORMAL
-    goto    fin_isr_keypad
-    movlw   letraD
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-
-teclaAst
-    btfss   estado_actual, NORMAL
-    goto fin_isr_keypad
-    movlw   simboloAst
-    movwf   keypad_value
-    bsf     banderas, BUFFER_KEYPAD
-    goto fin_isr_keypad
-    
-teclaNum
-    goto fin_isr_keypad
-
-fin_isr_keypad
-    ; repone la linea base de las salidas para habilitar nueva busqueda
-    banksel PORTB
-    movlw   b'00000000'
-    movwf   PORTB 
-    banksel INTCON
-    bcf  INTCON, RBIF               ; asegura bajar bandera para salir limpio
-    goto fin_isr
-    END
+    ; truncamiento a nivel de byte (Aplica implicitamente division sobre base 256)
+    movf    acc_hi, w               
+    movwf   luz_
