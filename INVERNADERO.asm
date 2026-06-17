@@ -565,12 +565,8 @@ loop_umbral2_guardar_luz
     movf    config_umbral_temp, w
     movwf   umbral_luz
     
-    ; aplica transformacion no lineal de magnitud ingresada por el usuario (0-99%) a resolucion fisica de conversion (0-255)
-    movlw   HIGH(tabla_bcd_adc)     
-    movwf   PCLATH
+    ; ELIMINAMOS LA TABLA. Guardamos el decimal puro (0-99) directo
     movf    porcentaje_tmp, w
-    call    tabla_bcd_adc
-    clrf    PCLATH
     movwf   umbral_luz_8bit         
     goto    loop_umbral2_fin
 
@@ -628,16 +624,18 @@ apagar_calefactor
     bcf     PORTC, 1                ; Condicion no cumplida: bloquea RC1
     
 control_iluminacion
-    ; 4. Evaluacion de Luz
-    ; Condicion de activacion: Nivel de luz < Umbral Luz
-    movf    umbral_luz_8bit, w
-    subwf   adc_luz, w              ; W = Luz - Umbral Luz
+    ; Forzamos el calculo del porcentaje actual (0-99) ANTES de comparar
+    call    calcular_porcentaje_luz 
+    
+    movf    umbral_luz_8bit, w      ; Carga el umbral puro (ej: 80)
+    subwf   luz_porcentaje, w       ; W = luz_porcentaje - umbral
+    
     btfsc   STATUS, C               ; Si C=0 (Luz < Umbral), ignora el salto
     goto    apagar_leds
-    bsf     PORTC, 2                ; Condicion cumplida: satura RC2
+    bsf     PORTC, 2                ; Condicion cumplida: enciende LED
     return
 apagar_leds
-    bcf     PORTC, 2                ; Condicion no cumplida: bloquea RC2
+    bcf     PORTC, 2                ; Condicion no cumplida: apaga LED
     return
 
 
